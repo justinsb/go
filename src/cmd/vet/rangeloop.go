@@ -44,6 +44,30 @@ func checkRangeLoop(f *File, node ast.Node) {
 	if len(sl) == 0 {
 		return
 	}
+	for _, s := range sl {
+		ast.Inspect(s, func(n0 ast.Node) bool {
+			fn, ok := n0.(*ast.FuncLit)
+			if !ok {
+				return true
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				id, ok := n.(*ast.Ident)
+				if !ok || id.Obj == nil {
+					return true
+				}
+				if f.pkg.types[id].Type == nil {
+					// Not referring to a variable
+					return true
+				}
+				if key != nil && id.Obj == key.Obj || val != nil && id.Obj == val.Obj {
+					f.Bad(id.Pos(), "range variable", id.Name, "captured by func literal")
+				}
+				return true
+			})
+			return true
+		})
+	}
+
 	var last *ast.CallExpr
 	switch s := sl[len(sl)-1].(type) {
 	case *ast.GoStmt:
