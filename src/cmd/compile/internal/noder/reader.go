@@ -2241,6 +2241,9 @@ func (r *reader) expr() (res ir.Node) {
 		typ := r.typ()
 		return ir.NewZero(pos, typ)
 
+	case exprUnwrap:
+		return r.unwrapExpr()
+
 	case exprCompLit:
 		return r.compLit()
 
@@ -3158,6 +3161,64 @@ func (r *reader) multiExpr() []ir.Node {
 		exprs[i] = r.expr()
 	}
 	return exprs
+}
+
+// unwrapExpr reads an error-propagating unwrap of a (T, error)
+// multi-value expression x, and returns an expression of type T.
+//
+// The expression is lowered to an OINLCALL node, whose body evaluates x
+// into fresh temporaries and returns from the enclosing function if the
+// error is non-nil, and whose single result is the T temporary:
+//
+//	v, err := x
+//	if err != nil {
+//		return zero, ..., err
+//	}
+//	v
+//
+// Using OINLCALL (rather than, say, an init list on v) keeps the
+// evaluation order of x relative to the surrounding expression intact,
+// since the order pass emits the body at the point where the unwrap
+// is evaluated.
+func (r *reader) unwrapExpr() ir.Node {
+	pos := r.pos()
+	x := r.expr()
+
+	tuple := x.Type()
+	if !tuple.IsFuncArgStruct() || tuple.NumFields() != 2 {
+		base.FatalfAt(pos, "unwrap of non-(T, error) expression %v: %v", x, tuple)
+	}
+
+	val := r.temp(pos, tuple.Field(0).Type)
+	err := r.temp(pos, tuple.Field(1).Type)
+
+	// v, err := x
+	as := ir.NewAssignListStmt(pos, ir.OAS2, []ir.Node{val, err}, []ir.Node{x})
+	as.Def = true
+	as.PtrInit().Append(ir.NewDecl(pos, ir.ODCL, val), ir.NewDecl(pos, ir.ODCL, err))
+	val.Defn = as
+	err.Defn = as
+
+	// if err != nil { return zero, ..., err }
+	//
+	// Note that if this function body is being inlined into a caller,
+	// unifiedInlineCall rewrites the return statement appropriately.
+	resultTypes := r.curfn.Type().Results()
+	results := make([]ir.Node, len(resultTypes))
+	for i, f := range resultTypes[:len(resultTypes)-1] {
+		results[i] = typecheck.Expr(ir.NewZero(pos, f.Type))
+	}
+	results[len(results)-1] = err
+
+	cond := ir.NewBinaryExpr(pos, ir.ONE, err, ir.NewNilExpr(pos, err.Type()))
+	ret := ir.NewReturnStmt(pos, results)
+	nif := ir.NewIfStmt(pos, cond, []ir.Node{ret}, nil)
+
+	body := []ir.Node{typecheck.Stmt(as), typecheck.Stmt(nif)}
+	n := ir.NewInlinedCallExpr(pos, body, []ir.Node{val})
+	n.SetType(val.Type())
+	n.SetTypecheck(1)
+	return n
 }
 
 // temp returns a new autotemp of the specified type.

@@ -3630,6 +3630,70 @@ q.M0()       // (*q).M0 is valid but not a field selector
 </pre>
 
 
+<h3 id="Selectors_on_results">Selectors on multi-value expressions</h3>
+
+<p>
+<i>This section describes an experimental extension that is not part of the
+standard Go language.</i>
+</p>
+
+<p>
+As a special case, the operand <code>x</code> of a selector expression
+<code>x.f</code> may be a multi-valued expression (such as a
+<a href="#Calls">call</a> of a function with two results) of type
+<code>(T, error)</code>. Such an expression is said to <i>unwrap</i>
+<code>x</code>. The selector denotes the field or method <code>f</code>
+of the first value, of type <code>T</code>, as if <code>x.f</code> were
+written <code>v.f</code> with <code>v</code> a (non-addressable) value
+of type <code>T</code>.
+</p>
+
+<p>
+An unwrapping selector may appear only inside the body of a function
+whose final result has type <code>error</code>.
+When the selector expression is evaluated, <code>x</code> is evaluated
+first. If its second value is not <code>nil</code>, the enclosing function
+returns immediately: its final result is that value, and all of its other
+results are the <a href="#The_zero_value">zero value</a> of their type.
+Any <a href="#Defer_statements">deferred</a> functions run as for any other
+return. Otherwise, the selector is applied to the first value and
+evaluation continues normally.
+</p>
+
+<p>
+Thus, in the body of a function with results <code>(R, error)</code>,
+</p>
+
+<pre>
+return os.Open(name).Stat().Size(), nil
+</pre>
+
+<p>
+is equivalent to
+</p>
+
+<pre>
+f, err := os.Open(name)
+if err != nil {
+	return 0, err
+}
+fi, err := f.Stat()
+if err != nil {
+	return 0, err
+}
+return fi.Size(), nil
+</pre>
+
+<p>
+Only expressions of exactly two values whose second value has type
+<code>error</code> may be unwrapped; other multi-valued expressions remain
+invalid in single-value contexts. Because the unwrapped value is not
+addressable, the selector cannot denote a method with a pointer receiver
+when <code>T</code> is not a pointer type, and the resulting field
+selector cannot be assigned to.
+</p>
+
+
 <h3 id="Method_expressions">Method expressions</h3>
 
 <p>

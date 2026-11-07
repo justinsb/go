@@ -232,7 +232,7 @@ func (check *Checker) lhsVar(lhs ast.Expr) Type {
 	default:
 		if sel, ok := x.expr.(*ast.SelectorExpr); ok {
 			var op operand
-			check.expr(nil, &op, sel.X)
+			check.rawExpr(nil, &op, sel.X, nil, false) // rawExpr: sel.X may be a (T, error) multi-value (see unwrapResult)
 			if op.mode() == mapindex {
 				check.errorf(&x, UnaddressableFieldAssign, "cannot assign to struct field %s in map", ExprString(x.expr))
 				return Typ[Invalid]

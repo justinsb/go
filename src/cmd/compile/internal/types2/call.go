@@ -787,7 +787,12 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 		}
 	}
 
-	check.exprOrType(x, e.X, false)
+	// Like check.exprOrType, but a (T, error) multi-value operand is
+	// permitted: see unwrapResult.
+	check.rawExpr(nil, x, e.X, nil, false)
+	check.exclude(x, 1<<novalue)
+	check.unwrapResult(x, e)
+	check.singleValue(x)
 	switch x.mode() {
 	case builtin:
 		check.errorf(e.Pos(), UncalledBuiltin, "invalid use of %s in selector expression", x)

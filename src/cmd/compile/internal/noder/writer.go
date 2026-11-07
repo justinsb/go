@@ -1983,7 +1983,7 @@ func (w *writer) expr(expr syntax.Expr) {
 
 		case types2.FieldVal:
 			w.Code(exprFieldVal)
-			w.expr(expr.X)
+			w.selectorRecv(expr.X)
 			w.pos(expr)
 			w.selector(sel.Obj())
 
@@ -2285,11 +2285,11 @@ func (w *writer) recvExpr(expr *syntax.SelectorExpr, sel *types2.Selection) type
 	implicits := index[:len(index)-1]
 
 	w.Code(exprRecv)
-	w.expr(expr.X)
+	w.selectorRecv(expr.X)
 	w.pos(expr)
 	w.Len(len(implicits))
 
-	typ := w.p.typeOf(expr.X)
+	typ := unwrapType(w.p.typeOf(expr.X))
 	for _, ix := range implicits {
 		typ = deref2(typ).Underlying().(*types2.Struct).Field(ix).Type()
 		w.Len(ix)
@@ -2302,6 +2302,40 @@ func (w *writer) recvExpr(expr *syntax.SelectorExpr, sel *types2.Selection) type
 		typ = recv
 	}
 
+	return typ
+}
+
+// selectorRecv writes out the operand expression x of a selector
+// expression (i.e., the receiver of a field or method selection).
+//
+// If x is a (T, error) multi-value expression, it is written as an
+// error-propagating unwrap of type T: see types2.Checker.unwrapResult.
+func (w *writer) selectorRecv(x syntax.Expr) {
+	tuple, ok := w.p.typeOf(x).(*types2.Tuple)
+	if !ok {
+		w.expr(x)
+		return
+	}
+	assert(tuple.Len() == 2)
+
+	// Like expr does for ordinary expressions, make sure the unwrapped
+	// value has exactly the type that the selection expects, even when
+	// the call's result type was shaped differently.
+	w.Code(exprReshape)
+	w.typ(tuple.At(0).Type())
+
+	w.Code(exprUnwrap)
+	w.pos(x)
+	w.expr(x)
+}
+
+// unwrapType returns the type of a selector operand of type typ: if
+// typ is a (T, error) tuple, that's T (see selectorRecv).
+func unwrapType(typ types2.Type) types2.Type {
+	if tuple, ok := typ.(*types2.Tuple); ok {
+		assert(tuple.Len() == 2)
+		return tuple.At(0).Type()
+	}
 	return typ
 }
 
