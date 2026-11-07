@@ -22,13 +22,10 @@
 
 package types
 
-import (
-	"go/ast"
-	. "internal/types/errors"
-)
+import . "internal/types/errors"
 
 // unwrapResult implements the error-propagating selector for the operand
-// x of the selector expression e.
+// x of a selector expression.
 //
 // If x is a multi-value expression of type (T, error), x becomes a
 // (non-addressable) value of type T, provided the enclosing function has
@@ -36,7 +33,7 @@ import (
 //
 // If x is any other multi-value expression, an error is reported, as for
 // any other single-value context.
-func (check *Checker) unwrapResult(x *operand, e *ast.SelectorExpr) {
+func (check *Checker) unwrapResult(x *operand) {
 	if x.mode() != value {
 		return
 	}

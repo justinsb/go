@@ -793,7 +793,7 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 	// permitted: see unwrapResult.
 	check.rawExpr(nil, x, e.X, nil, false)
 	check.exclude(x, 1<<novalue)
-	check.unwrapResult(x, e)
+	check.unwrapResult(x)
 	check.singleValue(x)
 	switch x.mode() {
 	case builtin:
