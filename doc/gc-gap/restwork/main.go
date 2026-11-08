@@ -35,14 +35,17 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"region"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -57,6 +60,7 @@ var (
 	zipfS     = flag.Float64("zipf", 1.1, "client: zipf skew of item popularity (>1)")
 	label     = flag.String("label", "", "client: label for the output")
 	jsonOut   = flag.Bool("json", false, "client: JSON output")
+	cpuProf   = flag.String("cpuprofile", "", "server: write a CPU profile to this file on SIGINT/SIGTERM")
 )
 
 // ---- domain ---------------------------------------------------------------
@@ -477,6 +481,23 @@ func runServer(addr string) {
 	}
 	fmt.Printf("listening on %s (items=%d cache=%d GODEBUG=%q)\n", ln.Addr(), *nItems, *cacheCap, os.Getenv("GODEBUG"))
 	srv := &http.Server{Handler: mux}
+	if *cpuProf != "" {
+		f, err := os.Create(*cpuProf)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal(err)
+		}
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			<-sig
+			pprof.StopCPUProfile()
+			f.Close()
+			os.Exit(0)
+		}()
+	}
 	log.Fatal(srv.Serve(ln))
 }
 
