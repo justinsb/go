@@ -21,7 +21,7 @@ func mallocgcSmallScanNoHeaderSC1(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -174,7 +174,7 @@ func mallocgcSmallScanNoHeaderSC2(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -327,7 +327,7 @@ func mallocgcSmallScanNoHeaderSC3(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -480,7 +480,7 @@ func mallocgcSmallScanNoHeaderSC4(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -633,7 +633,7 @@ func mallocgcSmallScanNoHeaderSC5(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -786,7 +786,7 @@ func mallocgcSmallScanNoHeaderSC6(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -939,7 +939,7 @@ func mallocgcSmallScanNoHeaderSC7(size uintptr, typ *_type, needzero bool) unsaf
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1092,7 +1092,7 @@ func mallocgcTinySC2(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1199,7 +1199,7 @@ func mallocgcSmallNoScanSC2(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1298,7 +1298,7 @@ func mallocgcSmallNoScanSC3(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1397,7 +1397,7 @@ func mallocgcSmallNoScanSC4(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1496,7 +1496,7 @@ func mallocgcSmallNoScanSC5(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1595,7 +1595,7 @@ func mallocgcSmallNoScanSC6(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1694,7 +1694,7 @@ func mallocgcSmallNoScanSC7(size uintptr, typ *_type, needzero bool) unsafe.Poin
 
 	mp = acquirem()
 
-	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+	forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 	if forceSlowPath {
 		releasem(mp)
@@ -1800,6 +1800,12 @@ func mallocgcTinySlowPath(size uintptr, typ *_type, needzero bool) unsafe.Pointe
 
 	if debug.malloc {
 		if x := preMallocgcDebug(size, typ); x != nil {
+			return x
+		}
+	}
+
+	if gp := getg(); gp.region != nil {
+		if x := regionAlloc(gp, size, typ, needzero); x != nil {
 			return x
 		}
 	}
@@ -1941,6 +1947,12 @@ func mallocgcSmallScanSlowPath(size uintptr, typ *_type, needzero bool, spc span
 
 	if debug.malloc {
 		if x := preMallocgcDebug(size, typ); x != nil {
+			return x
+		}
+	}
+
+	if gp := getg(); gp.region != nil {
+		if x := regionAlloc(gp, size, typ, needzero); x != nil {
 			return x
 		}
 	}
@@ -2118,6 +2130,12 @@ func mallocgcSmallNoScanSlowPath(size uintptr, typ *_type, needzero bool, spc sp
 
 	if debug.malloc {
 		if x := preMallocgcDebug(size, typ); x != nil {
+			return x
+		}
+	}
+
+	if gp := getg(); gp.region != nil {
+		if x := regionAlloc(gp, size, typ, needzero); x != nil {
 			return x
 		}
 	}

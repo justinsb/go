@@ -505,9 +505,9 @@ func newSudogOutsideRegion() *sudog {
 	if gp == nil || gp.region == nil {
 		return new(sudog)
 	}
-	gp.region.ignore++
+	gp.regionIgnore++
 	s := new(sudog)
-	gp.region.ignore--
+	gp.regionIgnore--
 	return s
 }
 

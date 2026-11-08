@@ -1402,8 +1402,8 @@ func gcMarkTermination(stw worldStop) {
 		// marking is complete so we can turn the write barrier off
 		setGCPhase(_GCoff)
 		stwSwept = gcSweep(work.mode)
-		// Sweep the spans cached by memory regions in place; see region.go.
-		regionSweepAll()
+		// Sweep the memory region blocks in place; see region.go.
+		regionMarkTermination()
 	})
 
 	mp.traceback = 0

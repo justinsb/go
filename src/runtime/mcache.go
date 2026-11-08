@@ -63,11 +63,6 @@ type mcache struct {
 	// in this mcache are stale and need to be flushed so they
 	// can be swept. This is done in acquirep.
 	flushGen atomic.Uint32
-
-	// region is non-nil if this is the private cache of a goroutine
-	// region (see region.go). Spans it caches are tagged with the
-	// region and full spans are kept by the region.
-	region *regionState
 }
 
 // A gclink is a node in a linked list of blocks, like mlink,
@@ -111,7 +106,6 @@ func allocmcache() *mcache {
 		c.alloc[i] = &emptymspan
 	}
 	c.nextSample = nextSample()
-	c.region = nil
 
 	return c
 }
@@ -152,10 +146,6 @@ func getMCache(mp *m) *mcache {
 		// mcache0 is cleared when bootstrapping is complete,
 		// by procresize.
 		c = mcache0
-	} else if rc := regionMCache(mp); rc != nil {
-		// The goroutine is inside a memory region: allocate from
-		// the region's private cache.
-		c = rc
 	} else {
 		c = pp.mcache
 	}
@@ -189,13 +179,7 @@ func (c *mcache) refill(spc spanClass) {
 		if s.sweepgen != mheap_.sweepgen+3 {
 			throw("bad sweepgen in refill")
 		}
-		if c.region != nil && s.region == c.region {
-			// A full region span: the region keeps it so that its
-			// objects can be freed in bulk when the region ends.
-			c.region.keepFull(s)
-		} else {
-			mheap_.central[spc].mcentral.uncacheSpan(s)
-		}
+		mheap_.central[spc].mcentral.uncacheSpan(s)
 
 		// Count up how many slots were used and record it.
 		stats := memstats.heapStats.acquire()
@@ -215,12 +199,6 @@ func (c *mcache) refill(spc spanClass) {
 
 		// Clear the second allocCount just to be safe.
 		s.allocCountBeforeCache = 0
-		if s.region != nil {
-			// The span stays with its region (keepFull above). Its
-			// allocations have just been accounted for; make sure
-			// the region's bulk free does not count them again.
-			s.allocCountBeforeCache = s.allocCount
-		}
 	}
 
 	// Get a new cached span from the central lists.
@@ -257,9 +235,6 @@ func (c *mcache) refill(spc spanClass) {
 	gcController.update(int64(s.npages*pageSize)-int64(usedBytes), int64(c.scanAlloc))
 	c.scanAlloc = 0
 
-	if c.region != nil {
-		c.region.tag(s)
-	}
 	c.alloc[spc] = s
 }
 
@@ -345,11 +320,7 @@ func (c *mcache) releaseAll() {
 
 			// Release the span to the mcentral (or, for an emptied
 			// region span, to the heap).
-			if s.region != nil {
-				regionUncacheSpan(s)
-			} else {
-				mheap_.central[i].mcentral.uncacheSpan(s)
-			}
+			mheap_.central[i].mcentral.uncacheSpan(s)
 			c.alloc[i] = &emptymspan
 		}
 	}

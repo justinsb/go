@@ -519,10 +519,13 @@ type mspan struct {
 	// full list (regionNext). regionBase marks objects that do not
 	// belong to the region (pre-existing or faded in an earlier region);
 	// regionFaded marks objects that escaped the current region.
-	region      *regionState
-	regionNext  *mspan
-	regionBase  *gcBits
-	regionFaded *gcBits
+	// Memory regions (region.go): isRegionBlock marks a region block;
+	// regionNext/regionPrev link all blocks, regionRecycleNext the
+	// unowned blocks with free lines.
+	isRegionBlock     bool
+	regionNext        *mspan
+	regionPrev        *mspan
+	regionRecycleNext *mspan
 }
 
 func (s *mspan) base() uintptr {
@@ -2007,9 +2010,13 @@ func addspecial(p unsafe.Pointer, s *special, force bool) bool {
 		throw("addspecial on invalid pointer")
 	}
 
-	// An object with a special (finalizer, cleanup, weak pointer,
-	// profile record) must not be freed by its region.
-	if gp := getg().m.curg; gp != nil && gp.region != nil {
+	// An object with a finalizer, cleanup or weak pointer must not be
+	// freed by its region. A profile record is attached by the
+	// allocator itself and is simply freed with the object (see
+	// regionFreeSpecials); it must not fade the object, because the
+	// compiler omits the region check on the stores that initialize a
+	// freshly allocated object.
+	if gp := getg().m.curg; gp != nil && gp.region != nil && s.kind != _KindSpecialProfile {
 		regionFadePtr(gp, uintptr(p))
 	}
 

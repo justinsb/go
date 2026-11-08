@@ -306,6 +306,7 @@ var debug struct {
 	clobberfree              int32
 	regions                  int32
 	regiontrace              int32
+	regioncheck              int32
 	containermaxprocs        int32
 	decoratemappings         int32
 	disablethp               int32
@@ -363,6 +364,7 @@ var dbgvars = []*dbgVar{
 	{name: "clobberfree", value: &debug.clobberfree},
 	{name: "regions", value: &debug.regions, def: 1},
 	{name: "regiontrace", value: &debug.regiontrace},
+	{name: "regioncheck", value: &debug.regioncheck},
 	{name: "containermaxprocs", value: &debug.containermaxprocs, def: 1},
 	{name: "dataindependenttiming", value: &debug.dataindependenttiming},
 	{name: "decoratemappings", value: &debug.decoratemappings, def: 1},

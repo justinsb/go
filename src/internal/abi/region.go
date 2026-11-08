@@ -11,3 +11,7 @@ import "internal/goarch"
 // a goroutine is inside a memory region (see runtime/region.go). The
 // runtime checks that the offset matches the struct layout.
 const GRegionOffset = 4 * goarch.PtrSize
+
+// GRegionIgnoreOffset is the offset of g.regionIgnore, the depth of
+// region.Ignore scopes; nonzero means allocations bypass the region.
+const GRegionIgnoreOffset = GRegionOffset + goarch.PtrSize

@@ -1076,6 +1076,14 @@ func mallocgc(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		return unsafe.Pointer(&zerobase)
 	}
 
+	if gp := getg(); gp.region != nil {
+		// Memory regions (region.go): small allocations of a goroutine
+		// inside a region are bump-allocated into its blocks.
+		if x := regionAlloc(gp, size, typ, needzero); x != nil {
+			return x
+		}
+	}
+
 	if sizeSpecializedMallocEnabled && size < uintptr(len(mallocNoScanTable)) {
 		if typ == nil || !typ.Pointers() {
 			if size >= maxTinySize {

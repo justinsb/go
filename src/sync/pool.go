@@ -101,11 +101,10 @@ func (p *Pool) Put(x any) {
 	if x == nil {
 		return
 	}
-	if runtime_regionActive() {
-		// Inside a memory region, objects are reclaimed in bulk when
-		// the region ends, so there is nothing to gain from pooling
-		// and keeping x would make it (and everything it references)
-		// escape the region. Drop it.
+	if !runtime_regionUnadopt(efaceData(x)) {
+		// Inside a memory region, an object of the region is freed when
+		// the region ends and must not be pooled. (An object adopted
+		// from the pool has just been released; see Get.)
 		return
 	}
 	if race.Enabled {
@@ -137,13 +136,6 @@ func (p *Pool) Put(x any) {
 // If Get would otherwise return nil and p.New is non-nil, Get returns
 // the result of calling p.New.
 func (p *Pool) Get() any {
-	if runtime_regionActive() {
-		// See Put.
-		if p.New != nil {
-			return p.New()
-		}
-		return nil
-	}
 	if race.Enabled {
 		race.Disable()
 	}
@@ -166,10 +158,24 @@ func (p *Pool) Get() any {
 			race.Acquire(poolRaceAddr(x))
 		}
 	}
+	if x != nil && !runtime_regionAdopt(efaceData(x)) {
+		// Inside a memory region the pooled object is adopted by the
+		// region, so that storing region pointers into it does not make
+		// them escape; the region checks its contents when it is put
+		// back. If the region cannot adopt any more objects, keep the
+		// pooled one for others and allocate instead.
+		p.Put(x)
+		x = nil
+	}
 	if x == nil && p.New != nil {
 		x = p.New()
 	}
 	return x
+}
+
+// efaceData returns the data word of an interface value.
+func efaceData(x any) unsafe.Pointer {
+	return (*[2]unsafe.Pointer)(unsafe.Pointer(&x))[1]
 }
 
 func (p *Pool) getSlow(pid int) any {
@@ -322,6 +328,9 @@ func runtime_registerPoolCleanup(cleanup func())
 func runtime_procPin() int
 func runtime_procUnpin()
 
-// runtime_regionActive reports whether the calling goroutine is inside a
-// memory region (see package region). Implemented in the runtime.
-func runtime_regionActive() bool
+// Memory regions (see package region); implemented in the runtime.
+// runtime_regionAdopt records that the region holds the pooled object p
+// and reports false if it cannot. runtime_regionUnadopt is called when p
+// is returned to the pool and reports whether p may be pooled.
+func runtime_regionAdopt(p unsafe.Pointer) bool
+func runtime_regionUnadopt(p unsafe.Pointer) bool

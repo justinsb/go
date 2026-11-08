@@ -27,7 +27,7 @@ upstream, and what the missing piece looks like, backed by a prototype that
 measures how much of a real server's allocation a static analysis could
 classify as goroutine-local.
 
-> **Update:** the second idea has since been built. [PROTOTYPE.md](PROTOTYPE.md)
+> **Update:** the second idea has since been built, twice. [PROTOTYPE-V2.md](PROTOTYPE-V2.md) describes the current prototype (bump allocation, placement inheritance, pooled-object adoption, compiler elision) and its measurements; [PROTOTYPE.md](PROTOTYPE.md)
 > describes a working implementation of goroutine-local regions in this
 > runtime (eager bulk free at `region.Do` exit, dynamic escape detection
 > through the write barrier, `net/http` serving every request in a

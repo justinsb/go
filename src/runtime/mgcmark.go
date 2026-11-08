@@ -474,6 +474,9 @@ func gcScanFinalizer(spf *specialfinalizer, s *mspan, gcw *gcWork) {
 
 	// A finalizer can be set for an inner byte of an object, find object beginning.
 	p := s.base() + spf.special.offset/s.elemsize*s.elemsize
+	if s.isRegionBlock {
+		p = s.regionObjBase(s.base() + spf.special.offset)
+	}
 
 	// Mark everything that can be reached from
 	// the object (but *not* the object itself or
@@ -1609,6 +1612,15 @@ func scanConservative(b, n uintptr, ptrmask *uint8, gcw *gcWork, state *stackSca
 		// Check if val points to a heap span.
 		span := spanOfHeap(val)
 		if span == nil {
+			continue
+		}
+
+		if span.isRegionBlock {
+			// Region blocks: find the object through the start
+			// bitmap; objects allocated during marking are black.
+			if obj := span.regionObjBase(val); obj != 0 {
+				greyobject(obj, b, i, span, gcw, (obj-span.regionData())/goarch.PtrSize)
+			}
 			continue
 		}
 

@@ -1,3 +1,5 @@
+> **Superseded** by [PROTOTYPE-V2.md](PROTOTYPE-V2.md), the second iteration.
+
 # Goroutine-local memory regions: a working prototype
 
 This is the implementation half of the study in [README.md](README.md). It

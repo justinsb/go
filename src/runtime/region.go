@@ -2,37 +2,37 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Goroutine-local memory regions (prototype).
+// Goroutine-local memory regions (prototype, second version).
 //
 // A region is a dynamic extent of one goroutine (region.Do) during which
-// small heap allocations are served from a private allocation cache
-// whose spans are tagged with the region. When Do returns, every object
-// allocated in the region that was not observed to escape is freed in
-// bulk by resetting the spans' allocation bitmaps, so the memory is
-// reused by the goroutine's next region without waiting for a GC cycle.
+// heap allocations of up to regionMaxObject bytes are bump-allocated into
+// region blocks: 64 KB spans divided into 128-byte lines. When Do
+// returns, every line that holds only objects not observed to escape is
+// freed at once, without a GC cycle, and is reused by the next region.
 //
 // Escape detection ("fading") is dynamic. The compiler emits a call to
-// wbRegion before every pointer store that may target heap memory when
-// g.region is non-nil, and the runtime's bulk copy paths do the same.
-// If the stored pointer refers to a region object and the destination
-// slot is not itself a (non-faded) region object, nor a stack slot in a
-// frame younger than the Do call, the object and everything reachable
-// from it inside the region are marked faded. Faded objects are left to
-// the garbage collector; they are ordinary heap objects from then on.
+// wbRegion after each batch of pointer stores when g.region is non-nil,
+// and the runtime's bulk copy paths do the same. If the stored pointer
+// refers to a live object of the current region and the destination slot
+// is not itself inside such an object, nor a stack slot in a frame
+// younger than the Do call, nor inside an object the region adopted from
+// a sync.Pool, the object and everything reachable from it inside the
+// region are marked faded. At exit the lines of faded objects are pinned
+// and left to the garbage collector, which treats a region block like
+// any other span: objects are found through a per-word start bitmap,
+// scanned through a per-word pointer bitmap, and marked in the span's
+// mark bits. Dead pinned lines are unpinned when the block is swept.
+//
+// Region blocks are swept in place at mark termination (regionMarkTermination),
+// never by the background sweeper, so a region may keep allocating into
+// its current block across GC cycles. A region that ends while the GC is
+// marking, or by panicking, or whose fade work stack overflowed, frees
+// nothing: all its lines are pinned and handed to the GC.
 //
 // Other ways for a region pointer to become visible outside the goroutine
 // are handled explicitly: the closure of a go statement (newproc1),
-// objects given specials (finalizers, cleanups, weak pointers, profiling),
-// and panic values that propagate out of Do. A region whose fade work
-// stack overflows, or that ends while the GC is marking, or that ends
-// by panicking, frees nothing: its objects are handed to the GC.
-//
-// Region spans use the ordinary mcache/mcentral protocol. At GC mark
-// termination all region caches are flushed (regionFlushAll), which
-// demotes any objects allocated so far to ordinary heap objects; the
-// barrier then stops considering them region objects, which is safe
-// because their lifetime is now the GC's responsibility.
-
+// objects given specials (finalizers, cleanups, weak pointers,
+// profiling), and panic values that propagate out of Do.
 package runtime
 
 import (
@@ -43,58 +43,123 @@ import (
 	"unsafe"
 )
 
-// Check that the compiler and the runtime agree on the offset of g.region.
+// Check that the compiler and the runtime agree on the layout of g.
 const _ = uint(unsafe.Offsetof(g{}.region) - abi.GRegionOffset)
 const _ = uint(abi.GRegionOffset - unsafe.Offsetof(g{}.region))
+const _ = uint(unsafe.Offsetof(g{}.regionIgnore) - abi.GRegionIgnoreOffset)
+const _ = uint(abi.GRegionIgnoreOffset - unsafe.Offsetof(g{}.regionIgnore))
 
 const (
+	regionBlockBytes = 64 << 10
+	regionBlockPages = regionBlockBytes / pageSize
+	regionLineBytes  = 128
+	regionLineWords  = regionLineBytes / goarch.PtrSize
+	regionHdrBytes   = 4096
+	regionDataBytes  = regionBlockBytes - regionHdrBytes
+	regionDataWords  = regionDataBytes / goarch.PtrSize
+	regionLines      = regionDataBytes / regionLineBytes
+	regionBitWords   = regionDataWords / 64
+
+	// regionMaxObject is the largest allocation served from a region.
+	// Larger objects come from the ordinary heap and are "outside".
+	regionMaxObject = 16 << 10
+
 	// regionStackSize is the capacity of the transitive fade work stack.
 	// Overflow poisons the region (nothing is freed at exit).
 	regionStackSize = 2048
 
-	// regionBitsBytes is the size of the per-span region bitmaps. Spans
-	// have at most 8192/8 = 1024 objects, so 128 bytes always suffice.
-	regionBitsBytes = 128
+	// regionMaxAdopted is the number of pooled objects a region can
+	// adopt (see sync.Pool). Beyond that Get allocates instead.
+	regionMaxAdopted = 32
+
+	// Line states.
+	regionLineFree   = 0 // no live object; available for allocation
+	regionLineActive = 1 // allocated by the owning region; freed at exit unless pinned
+	regionLinePinned = 2 // holds an object that escaped or that the GC owns
 )
 
-// regionState is the per-goroutine region state. It lives in
-// non-GC'd memory and is reused across region.Do calls on the same
-// goroutine.
-type regionState struct {
-	_ sys.NotInHeap
+// regionBlockHdr is the metadata at the start of every region block. The
+// GC never scans it: the block's data begins regionHdrBytes in.
+type regionBlockHdr struct {
+	typ        abi.Type                   // synthetic type whose GC mask is ptr, for the GC's pointer iterator
+	owner      *regionState               // region allocating from this block (nil when unowned)
+	next       *mspan                     // next block of owner (list of blocks touched in the active region)
+	allocEnd   uint32                     // end offset (from data start) of the highest allocation so far
+	pinned     uint32                     // number of pinned lines
+	nfaded     uint32                     // faded objects whose lines are not yet pinned (reset at exit)
+	dbg        *[regionDataWords]uint32   // per-word history, GODEBUG=regioncheck: flags | sizewords<<8 | cycle<<20
+	fadedLines [regionLines/64 + 1]uint64 // lines holding a faded object (fast path of the store check)
+	activeLo   uint32                     // active lines of the owner are within [activeLo, activeHi)
+	activeHi   uint32
 
-	c     *mcache // private allocation cache; its spans have s.region == this
+	start [regionBitWords]uint64 // object start bits, one per word
+	ptr   [regionBitWords]uint64 // pointer bits, one per word
+	faded [regionBitWords]uint64 // faded bits, at object starts
+	lines [regionLines]uint8
+}
+
+// regionAdopted records an object the region adopted from a sync.Pool.
+// Stores into it do not fade; its contents are checked when it is
+// returned to the pool or at region exit.
+type regionAdopted struct {
+	base, size uintptr
+}
+
+// regionState is the per-goroutine region state. It lives in non-GC'd
+// memory and is reused across region.Do calls on the same goroutine.
+type regionState struct {
+	_     sys.NotInHeap
 	owner *g
 	next  *regionState // in allRegions
+
+	// Bump allocation state: [cursor, limit) is the unused part of the
+	// current free line run of cur. Lines of the run become active (and
+	// have their stale bits cleared) only as the cursor reaches them;
+	// activeTo is the end of the last active line.
+	cur                     *mspan
+	cursor, limit, activeTo uintptr
+	// blocks is the list of blocks touched in the active region (via the
+	// header's next field); cur is always on it while a region is active.
+	blocks *mspan
 
 	// stackOffset is gp.stack.hi minus the stack pointer at the Do call.
 	// Stack slots at a smaller offset (younger frames) are inside the
 	// region; older frames are outside.
 	stackOffset uintptr
 
-	active   bool  // inside region.Do
-	poisoned bool  // free nothing at exit
-	ignore   int32 // depth of region.Ignore; allocations go to the P's cache
+	active   bool // inside region.Do
+	poisoned bool // free nothing at exit
 
-	// full holds spans of the region that became full during the
-	// region (they stay owned by the region rather than being returned
-	// to the mcentral).
-	full *mspan
+	nadopted int
+	adopted  [regionMaxAdopted]regionAdopted
 
 	// Transitive fade work stack of object base addresses.
 	sp    int
 	stack [regionStackSize]uintptr
 
 	// Per-region statistics, added to the global counters at exit.
+	// Byte accounting is by lines (claimedLines), which balances exactly
+	// against the lines freed at exit and by the GC; allocBytes is the
+	// sum of object sizes, for region.Stats.
+	claimedLines       uint64
 	allocs, allocBytes uint64
 	faded, fadedBytes  uint64
+	scanBytes          uint64 // allocated bytes of pointerful objects, for the pacer
 }
 
 var (
-	allRegions     *regionState // all live region states, for GC-time flushing
+	allRegions     *regionState // all live region states
 	allRegionsLock mutex
-
 	regionFreeList *regionState // released states for reuse
+
+	// regionBlocks is the list of all region blocks (via mspan.regionNext/
+	// regionPrev), owned or not, for sweeping at mark termination.
+	// regionRecycle is a stack (via mspan.regionRecycleNext) of unowned
+	// blocks that have free lines. Both under regionLock.
+	regionLock    mutex
+	regionBlocks  *mspan
+	regionRecycle *mspan
+	regionNBlocks int
 
 	// regionStats are cumulative counters, read by region.Stats.
 	regionStats struct {
@@ -105,21 +170,22 @@ var (
 		faded        atomic.Uint64
 		fadedBytes   atomic.Uint64
 		poisoned     atomic.Uint64 // regions abandoned (overflow, panic, GC marking)
-		flushes      atomic.Uint64 // caches flushed at GC
-		spanResets   atomic.Uint64
+		blocks       atomic.Uint64 // blocks taken from the heap
+		barrierCalls atomic.Uint64 // wbRegion slow-path calls (when regiontrace > 0)
 	}
 )
 
 // regionsEnabled reports whether region.Do should create regions.
-func regionsEnabled() bool { return debug.regions != 0 }
+func regionsEnabled() bool {
+	return debug.regions != 0 && !raceenabled && !msanenabled && !asanenabled
+}
 
-// regionDo runs f in a new region of the current goroutine.
+// regionDo runs f in a region on the calling goroutine.
 //
 //go:linkname regionDo region.runtime_regionDo
 func regionDo(f func()) {
 	gp := getg()
 	if !regionsEnabled() || gp.region != nil || gp.m.curg != gp {
-		// Disabled, nested (the outer region covers f), or not a user goroutine.
 		f()
 		return
 	}
@@ -133,36 +199,69 @@ func regionDo(f func()) {
 	f()
 }
 
-// regionIgnore runs f with allocations excluded from the current
-// region (they go to the ordinary heap). The escape barrier stays active.
+// regionIgnore runs f with allocations placed outside the region.
 //
 //go:linkname regionIgnore region.runtime_regionIgnore
 func regionIgnore(f func()) {
 	gp := getg()
-	r := gp.region
-	if r == nil {
+	if gp.region == nil {
 		f()
 		return
 	}
-	// No defer: a panic abandons the region anyway (regionEnd), and
-	// regionBegin resets ignore.
-	r.ignore++
+	gp.regionIgnore++
 	f()
-	r.ignore--
+	gp.regionIgnore--
 }
 
-// regionActive reports whether the current goroutine is inside a region.
+// regionInherit runs f with allocations placed where p lives: inside the
+// region if p is a live object of the region, a stack slot, or nil;
+// outside it otherwise.
 //
+//go:linkname regionInherit region.runtime_regionInherit
+func regionInherit(p unsafe.Pointer, f func()) {
+	gp := getg()
+	if gp.region == nil || gp.regionIgnore != 0 || regionIsLocal(gp, uintptr(p)) {
+		f()
+		return
+	}
+	gp.regionIgnore++
+	f()
+	gp.regionIgnore--
+}
+
+// regionIsLocal reports whether p is nil, a stack address of gp, or a
+// live object of gp's region.
+func regionIsLocal(gp *g, p uintptr) bool {
+	if p == 0 || (gp.stack.lo <= p && p < gp.stack.hi) {
+		return true
+	}
+	r := gp.region
+	if r == nil {
+		return false
+	}
+	mp := acquirem()
+	_, _, ok := r.isRegionObject(p)
+	releasem(mp)
+	return ok
+}
+
 //go:linkname regionActive region.runtime_regionActive
-//go:linkname sync_runtime_regionActive sync.runtime_regionActive
 func regionActive() bool {
 	return getg().region != nil
 }
 
-func sync_runtime_regionActive() bool { return getg().region != nil }
+//go:linkname regionOwns region.runtime_regionOwns
+func regionOwns(p unsafe.Pointer) bool {
+	gp := getg()
+	if gp.region == nil {
+		return false
+	}
+	mp := acquirem()
+	_, _, ok := gp.region.isRegionObject(uintptr(p))
+	releasem(mp)
+	return ok
+}
 
-// regionReadStats copies the global counters.
-//
 //go:linkname regionReadStats region.runtime_regionReadStats
 func regionReadStats(out *[9]uint64) {
 	out[0] = regionStats.regions.Load()
@@ -172,8 +271,8 @@ func regionReadStats(out *[9]uint64) {
 	out[4] = regionStats.faded.Load()
 	out[5] = regionStats.fadedBytes.Load()
 	out[6] = regionStats.poisoned.Load()
-	out[7] = regionStats.flushes.Load()
-	out[8] = regionStats.spanResets.Load()
+	out[7] = regionStats.blocks.Load()
+	out[8] = regionStats.barrierCalls.Load()
 }
 
 func newRegionState(gp *g) *regionState {
@@ -186,13 +285,11 @@ func newRegionState(gp *g) *regionState {
 	if r == nil {
 		r = (*regionState)(persistentalloc(unsafe.Sizeof(regionState{}), 64, &memstats.other_sys))
 	}
-	r.c = allocmcache()
-	r.c.region = r
 	r.owner = gp
-	r.full = nil
+	r.cur, r.cursor, r.limit, r.activeTo, r.blocks = nil, 0, 0, 0, nil
 	r.sp = 0
+	r.nadopted = 0
 	r.poisoned = false
-	r.ignore = 0
 	lock(&allRegionsLock)
 	r.next = allRegions
 	allRegions = r
@@ -200,8 +297,7 @@ func newRegionState(gp *g) *regionState {
 	return r
 }
 
-// regionRelease frees the region state of a dying goroutine. Called
-// from gdestroy on the system stack.
+// regionRelease gives up a goroutine's region state (gdestroy).
 func regionRelease(gp *g) {
 	r := gp.regionCache
 	if r == nil {
@@ -209,6 +305,7 @@ func regionRelease(gp *g) {
 	}
 	gp.regionCache = nil
 	gp.region = nil
+	gp.regionIgnore = 0
 	lock(&allRegionsLock)
 	for pp := &allRegions; *pp != nil; pp = &(*pp).next {
 		if *pp == r {
@@ -217,9 +314,14 @@ func regionRelease(gp *g) {
 		}
 	}
 	unlock(&allRegionsLock)
-	r.flush()
-	freemcache(r.c)
-	r.c = nil
+	mp := acquirem()
+	mp.mallocing = 1
+	if r.cur != nil {
+		r.releaseBlock(r.cur)
+		r.cur = nil
+	}
+	mp.mallocing = 0
+	releasem(mp)
 	r.owner = nil
 	lock(&allRegionsLock)
 	r.next = regionFreeList
@@ -232,52 +334,48 @@ func regionBegin(gp *g, r *regionState, sp uintptr) {
 	r.active = true
 	r.poisoned = false
 	r.sp = 0
-	r.ignore = 0
-	r.allocs, r.allocBytes, r.faded, r.fadedBytes = 0, 0, 0, 0
-	// Publish last: from here on the barrier and allocator consult r.
+	r.nadopted = 0
+	r.allocs, r.allocBytes, r.faded, r.fadedBytes, r.scanBytes, r.claimedLines = 0, 0, 0, 0, 0, 0
+	gp.regionIgnore = 0
+	if r.cur != nil {
+		// The current block was kept from the previous region. Start
+		// allocating at its first free run.
+		r.blocks = r.cur
+		r.cur.regionHdr().next = nil
+		r.cursor, r.limit, r.activeTo = 0, 0, 0
+	}
 	gp.region = r
 }
 
-// regionEnd ends the region: frees unfaded objects if it is safe to do
-// so, otherwise hands everything to the GC.
 func regionEnd(gp *g, r *regionState) {
-	// Panic values (and anything they reference) propagate past the
-	// region. Rather than fading them precisely, abandon the region.
 	if gp._panic != nil {
 		r.poisoned = true
 	}
-
 	mp := acquirem()
 	mp.mallocing = 1 // keep the GC from starting underneath us
+	gp.region = nil
+	gp.regionIgnore = 0
+	r.active = false
 	regionStats.regions.Add(1)
+	abandon := r.poisoned || gcphase != _GCoff || writeBarrier.enabled
+	if abandon {
+		regionStats.poisoned.Add(1)
+	} else {
+		r.scanOuterStack(gp)
+		r.releaseAdopted()
+		if debug.regioncheck != 0 {
+			r.verifyExit()
+		}
+	}
 	regionStats.faded.Add(int64(r.faded))
 	regionStats.fadedBytes.Add(int64(r.fadedBytes))
-	if r.poisoned || gcphase != _GCoff || writeBarrier.enabled {
-		// Freeing while the collector is marking could let a grey
-		// object be scanned after its slot was reused. Keep the
-		// objects (they become ordinary heap objects for the GC to
-		// reclaim) but keep the spans cached for the next region.
-		regionStats.poisoned.Add(1)
-		gp.region = nil
-		r.active = false
-		r.abandonAll()
-		mp.mallocing = 0
-		releasem(mp)
-		return
-	}
-	gp.region = nil
-	r.active = false
-	r.scanOuterStack(gp)
-	r.freeAll()
+	r.finish(abandon)
 	mp.mallocing = 0
 	releasem(mp)
 }
 
-// scanOuterStack fades every region object that a word in the frames
-// older than the Do call points to. Such pointers got there through
-// stores into the goroutine's own stack, which the barrier does not
-// act on (see regionCheckStore). The scan is conservative: a non-pointer
-// word that looks like a region pointer only keeps an object alive.
+// scanOuterStack fades every live region object referenced from the
+// stack frames older than the Do call, conservatively.
 func (r *regionState) scanOuterStack(gp *g) {
 	lo := gp.stack.hi - r.stackOffset
 	if lo < gp.stack.lo || lo > gp.stack.hi {
@@ -288,99 +386,510 @@ func (r *regionState) scanOuterStack(gp *g) {
 		if w == 0 {
 			continue
 		}
-		if s, idx, ok := r.isRegionObject(w); ok && s.isAllocatedIndex(idx) {
+		if s, base, ok := r.isRegionObject(w); ok {
 			if debug.regiontrace > 0 {
-				print("region: fade-stack obj=", hex(w), " size=", s.elemsize, " slot=", hex(p), "\n")
+				print("region: fade-stack obj=", hex(base), " size=", s.regionObjSize(base), " slot=", hex(p), "\n")
 			}
-			r.fade(s, idx)
+			r.fade(s, base)
 		}
 	}
 }
 
-// tag marks s as owned by r. Objects already allocated in s (from
-// before the region acquired it) are recorded as foreign.
-func (r *regionState) tag(s *mspan) {
-	if s.regionBase == nil {
-		s.regionBase = (*gcBits)(persistentalloc(regionBitsBytes, 8, &memstats.other_sys))
-		s.regionFaded = (*gcBits)(persistentalloc(regionBitsBytes, 8, &memstats.other_sys))
+// ---- Allocation ------------------------------------------------------------
+
+func (s *mspan) regionHdr() *regionBlockHdr { return (*regionBlockHdr)(unsafe.Pointer(s.base())) }
+func (s *mspan) regionData() uintptr        { return s.base() + regionHdrBytes }
+
+// regionAlloc allocates size bytes of type typ (which may be nil for
+// pointer-free memory) in gp's region. It returns nil if the allocation
+// does not belong in the region: an ignored scope, or too large. The
+// caller then allocates from the ordinary heap.
+//
+// The caller has already deducted GC assist credit for size.
+func regionAlloc(gp *g, size uintptr, typ *_type, needzero bool) unsafe.Pointer {
+	if gp.regionIgnore != 0 || size > regionMaxObject {
+		return nil
 	}
-	// Copy whole 64-bit words: allocBits is allocated in 8-byte blocks
-	// (newMarkBits), and resetSpan works on words. Bits at or beyond
-	// nelems are masked off there.
-	nbytes := regionBitsWords(s.nelems) * 8
-	memmove(unsafe.Pointer(s.regionBase), unsafe.Pointer(s.allocBits), nbytes)
-	memclrNoHeapPointers(unsafe.Pointer(s.regionFaded), nbytes)
-	// allocBits is a snapshot from the last sweep: objects allocated
-	// since then are not recorded in it, they are implied by being
-	// below freeindex (see mspan.isFree). Everything below freeindex is
-	// allocated and foreign to the region.
-	bw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionBase))
-	fi := uintptr(s.freeindex)
-	for i := uintptr(0); i < fi/64; i++ {
-		bw[i] = ^uint64(0)
+	r := gp.region
+	mp := acquirem()
+	if mp.mallocing != 0 {
+		throw("region: malloc deadlock")
 	}
-	if fi%64 != 0 {
-		bw[fi/64] |= 1<<(fi%64) - 1
+	mp.mallocing = 1
+
+	asize := alignUp(size, goarch.PtrSize)
+	x := r.cursor
+	newBlock := false
+	if x+asize > r.limit {
+		x, newBlock = r.refill(asize)
 	}
-	s.region = r
+	r.cursor = x + asize
+	s := r.cur
+	hdr := s.regionHdr()
+	if r.cursor > r.activeTo {
+		r.activateTo(r.cursor)
+	}
+	off := x - s.regionData()
+	w := off / goarch.PtrSize
+	if hdr.dbg != nil {
+		// Overlap check against the exact recorded size of the
+		// nearest preceding object.
+		if pb := s.regionObjBase(x); pb != 0 {
+			pw := (pb - s.regionData()) / goarch.PtrSize
+			if psz := uintptr(hdr.dbg[pw]>>8&0xfff) * goarch.PtrSize; pb+psz > x && hdr.lines[pw*goarch.PtrSize/regionLineBytes] != regionLineFree && hdr.dbg[pw]&regionDbgDead == 0 {
+				print("region: alloc self-check: new object ", hex(x), " size ", asize, " overlaps object ", hex(pb), " size ", psz, " linestate=", hdr.lines[pw*goarch.PtrSize/regionLineBytes], " cursor=", hex(r.cursor), " limit=", hex(r.limit), " allocEnd=", hdr.allocEnd, "\n")
+				throw("region: overlapping allocation")
+			}
+		}
+		for j := w; j < w+asize/goarch.PtrSize; j++ {
+			if hdr.start[j/64]>>(j%64)&1 != 0 || hdr.ptr[j/64]>>(j%64)&1 != 0 {
+				print("region: alloc self-check: stale bits at word ", j, " (start=", hdr.start[j/64]>>(j%64)&1, " ptr=", hdr.ptr[j/64]>>(j%64)&1, ") for new object ", hex(x), " size ", asize, " line ", off/regionLineBytes, " cursor=", hex(r.cursor), " limit=", hex(r.limit), " worddbg=", hex(hdr.dbg[j]), "\n")
+				throw("region: stale bits in new object")
+			}
+		}
+	}
+	if end := uint32(off + asize); end > hdr.allocEnd {
+		hdr.allocEnd = end
+	}
+	hdr.start[w/64] |= 1 << (w % 64)
+	if hdr.dbg != nil {
+		f := uint32(work.cycles.Load())<<20 | uint32(asize/goarch.PtrSize)<<8
+		if writeBarrier.enabled {
+			f |= regionDbgBlack
+		}
+		hdr.dbg[w] = f
+	}
+	if needzero && s.needzero != 0 {
+		memclrNoHeapPointers(unsafe.Pointer(x), asize)
+	}
+	if typ != nil && typ.Pointers() {
+		regionWritePtrBits(hdr, w, size, typ)
+		r.scanBytes += uint64(asize)
+	}
+	if hdr.dbg != nil {
+		// Self-check of the object bitmaps.
+		if b := s.regionObjBase(x); b != x {
+			print("region: alloc self-check: base of ", hex(x), " is ", hex(b), "\n")
+			throw("region: bad object base")
+		}
+		if b := s.regionObjBase(x + asize - goarch.PtrSize); b != x {
+			print("region: alloc self-check: base of last word of ", hex(x), " size ", asize, " is ", hex(b), "\n")
+			throw("region: bad object base (last word)")
+		}
+		if sz := s.regionObjSize(x); sz < asize {
+			// The size of the last object of a run is inflated until
+			// the next allocation; it must never be too small.
+			print("region: alloc self-check: size of ", hex(x), " is ", sz, " want ", asize, " allocEnd=", hdr.allocEnd, " off=", off, "\n")
+			throw("region: bad object size")
+		}
+		if hdr.lines[off/regionLineBytes] != regionLineActive || hdr.lines[(off+asize-1)/regionLineBytes] != regionLineActive {
+			throw("region: allocation in inactive line")
+		}
+	}
+	r.allocs++
+	r.allocBytes += uint64(asize)
+
+	// Ensure that the stores above that initialize x to type-safe memory
+	// and set the pointer bitmap occur before the caller can make x
+	// observable to the garbage collector.
+	publicationBarrier()
+
+	if writeBarrier.enabled {
+		// Allocate black during marking.
+		s.markBitsForIndex(w).setMarked()
+		arena, pageIdx, pageMask := pageIndexOf(s.base())
+		if arena.pageMarks[pageIdx]&pageMask == 0 {
+			atomic.Or8(&arena.pageMarks[pageIdx], pageMask)
+		}
+		mp.p.ptr().gcw.bytesMarked += uint64(asize)
+	}
+
+	// Profiling sample, using the P's cache state like mallocgc does.
+	c := getMCache(mp)
+	c.nextSample -= int64(asize)
+	if c.nextSample < 0 || MemProfileRate != c.memProfRate {
+		profilealloc(mp, unsafe.Pointer(x), asize)
+	}
+
+	mp.mallocing = 0
+	releasem(mp)
+
+	if newBlock {
+		if t := (gcTrigger{kind: gcTriggerHeap}); t.test() {
+			gcStart(t)
+		}
+	}
+	return unsafe.Pointer(x)
 }
 
-// regionBitsWords returns the number of 64-bit words needed for a
-// bitmap of nelems objects.
-func regionBitsWords(nelems uint16) uintptr {
-	return (uintptr(nelems) + 63) / 64
+// regionWritePtrBits sets the pointer bits of the object at word w of
+// hdr, of size bytes tiled with typ.
+func regionWritePtrBits(hdr *regionBlockHdr, w, size uintptr, typ *_type) {
+	mask := getGCMask(typ)
+	nbits := typ.PtrBytes / goarch.PtrSize
+	ewords := typ.Size_ / goarch.PtrSize
+	for e := uintptr(0); e < size/typ.Size_; e++ {
+		dst := w + e*ewords
+		for i := uintptr(0); i < nbits; i += 64 {
+			v := readUintptr(addb(mask, i/8))
+			if n := nbits - i; n < 64 {
+				v &= 1<<n - 1
+			}
+			if v == 0 {
+				continue
+			}
+			d := dst + i
+			hdr.ptr[d/64] |= uint64(v) << (d % 64)
+			if d%64 != 0 && d%64+uintptr(64-sys.LeadingZeros64(uint64(v))) > 64 {
+				hdr.ptr[d/64+1] |= uint64(v) >> (64 - d%64)
+			}
+		}
+		if typ.Size_ == 0 {
+			break
+		}
+	}
 }
 
-// untag releases s from r.
-func untagRegionSpan(s *mspan) {
-	s.region = nil
+// refill finds room for an allocation of asize bytes: the next free line
+// run of the current block, or a block with free lines. It returns the
+// new cursor and whether a block was taken from the heap.
+func (r *regionState) refill(asize uintptr) (uintptr, bool) {
+	newBlock := false
+	r.closeRun()
+	for {
+		if r.cur != nil {
+			// Look for a free run after the current one.
+			from := uintptr(0)
+			if r.limit != 0 {
+				from = (r.limit - r.cur.regionData()) / regionLineBytes
+			}
+			if lo, hi, ok := r.cur.regionClaimRun(from, asize); ok {
+				r.cursor, r.limit, r.activeTo = lo, hi, lo
+				return lo, newBlock
+			}
+		}
+		s, fresh := regionGetBlock()
+		newBlock = newBlock || fresh
+		hdr := s.regionHdr()
+		hdr.owner = r
+		hdr.next = r.blocks
+		r.blocks = s
+		r.cur = s
+		r.cursor, r.limit, r.activeTo = 0, 0, 0
+	}
 }
 
-// isRegionObject reports whether p points into a non-foreign, non-faded
-// object of r. It returns the span and object index on success.
+// activateTo makes the lines of the current run up to address end
+// active, clearing their stale bits.
+func (r *regionState) activateTo(end uintptr) {
+	hdr := r.cur.regionHdr()
+	data := r.cur.regionData()
+	l := (r.activeTo - data) / regionLineBytes
+	if hdr.activeHi == 0 || uint32(l) < hdr.activeLo {
+		hdr.activeLo = uint32(l)
+	}
+	for ; l*regionLineBytes+data < end; l++ {
+		hdr.lines[l] = regionLineActive
+		hdr.clearLineBits(l)
+		r.claimedLines++
+	}
+	if uint32(l) > hdr.activeHi {
+		hdr.activeHi = uint32(l)
+	}
+	r.activeTo = data + l*regionLineBytes
+}
+
+// closeRun ends the current line run: the unused tail gets a sentinel
+// start bit, so that the size of the last object stays exact (see
+// regionObjSize) when later lines are reused. The sentinel is a dummy
+// object without pointers that is freed with its line.
+func (r *regionState) closeRun() {
+	if r.cur == nil || r.cursor >= r.activeTo {
+		r.cursor = r.limit
+		return
+	}
+	hdr := r.cur.regionHdr()
+	w := (r.cursor - r.cur.regionData()) / goarch.PtrSize
+	hdr.start[w/64] |= 1 << (w % 64)
+	if hdr.dbg != nil {
+		hdr.dbg[w] = uint32(work.cycles.Load())<<20 | uint32((r.activeTo-r.cursor)/goarch.PtrSize)<<8 | regionDbgSentinel
+	}
+	r.cursor = r.limit
+}
+
+// regionClaimRun finds the first run of free lines at or after line from
+// that can hold asize bytes and returns its address range. The lines are
+// activated as they are used (activateTo).
+func (s *mspan) regionClaimRun(from, asize uintptr) (lo, hi uintptr, ok bool) {
+	hdr := s.regionHdr()
+	for l := from; l < regionLines; {
+		if hdr.lines[l] != regionLineFree {
+			l++
+			continue
+		}
+		e := l + 1
+		for e < regionLines && hdr.lines[e] == regionLineFree {
+			e++
+		}
+		if (e-l)*regionLineBytes >= asize {
+			data := s.regionData()
+			return data + l*regionLineBytes, data + e*regionLineBytes, true
+		}
+		l = e
+	}
+	return 0, 0, false
+}
+
+// regionGetBlock returns an unowned block with free lines, reusing one
+// from the recycle stack if possible. fresh reports a heap allocation.
+func regionGetBlock() (s *mspan, fresh bool) {
+	lock(&regionLock)
+	for regionRecycle != nil {
+		s = regionRecycle
+		regionRecycle = s.regionRecycleNext
+		s.regionRecycleNext = nil
+		hdr := s.regionHdr()
+		if hdr.owner == nil && hdr.pinned < regionLines {
+			unlock(&regionLock)
+			return s, false
+		}
+	}
+	unlock(&regionLock)
+	return regionNewBlock(), true
+}
+
+// regionNewBlock allocates a region block from the heap.
+func regionNewBlock() *mspan {
+	s := mheap_.alloc(regionBlockPages, makeSpanClass(0, false))
+	if s == nil {
+		throw("region: out of memory")
+	}
+	// From the GC's point of view the block is a span of
+	// regionDataWords one-word slots, found through the start bitmap.
+	s.isRegionBlock = true
+	s.nelems = regionDataWords
+	s.freeindex = regionDataWords
+	s.freeIndexForScan = regionDataWords
+	s.allocCount = 1 // nonzero while in use
+	s.gcmarkBits = newMarkBits(regionDataWords)
+	s.allocBits = newAllocBits(regionDataWords)
+	s.limit = s.base() + regionBlockBytes
+	hdr := s.regionHdr()
+	memclrNoHeapPointers(unsafe.Pointer(hdr), regionHdrBytes)
+	hdr.typ = abi.Type{
+		Size_:       regionDataBytes,
+		PtrBytes:    regionDataBytes,
+		Align_:      goarch.PtrSize,
+		FieldAlign_: goarch.PtrSize,
+		Kind_:       abi.Struct,
+		GCData:      (*byte)(unsafe.Pointer(&hdr.ptr[0])),
+	}
+	atomic.StorepNoWB(unsafe.Pointer(&s.largeType), unsafe.Pointer(&hdr.typ))
+	if debug.regioncheck != 0 {
+		hdr.dbg = (*[regionDataWords]uint32)(persistentalloc(regionDataWords*4, 8, &memstats.other_sys))
+	}
+
+	gcController.update(regionBlockBytes, 0)
+	lock(&regionLock)
+	s.regionPrev = nil
+	s.regionNext = regionBlocks
+	if regionBlocks != nil {
+		regionBlocks.regionPrev = s
+	}
+	regionBlocks = s
+	regionNBlocks++
+	unlock(&regionLock)
+	regionStats.blocks.Add(1)
+	return s
+}
+
+// regionFreeBlock returns an unowned block with no live lines to the heap.
+// It must not be on the recycle stack.
+func regionFreeBlock(s *mspan) {
+	hdr := s.regionHdr()
+	if hdr.owner != nil || hdr.pinned != 0 {
+		throw("region: freeing a live block")
+	}
+	lock(&regionLock)
+	if s.regionPrev != nil {
+		s.regionPrev.regionNext = s.regionNext
+	} else {
+		regionBlocks = s.regionNext
+	}
+	if s.regionNext != nil {
+		s.regionNext.regionPrev = s.regionPrev
+	}
+	s.regionNext, s.regionPrev = nil, nil
+	regionNBlocks--
+	unlock(&regionLock)
+	if s.specials != nil {
+		throw("region: freeing a block with specials")
+	}
+	s.isRegionBlock = false
+	atomic.StorepNoWB(unsafe.Pointer(&s.largeType), nil)
+	s.allocCount = 0
+	s.needzero = 1
+	atomic.Store(&s.sweepgen, mheap_.sweepgen)
+	// Take the block out of the pacer's live heap estimate, which the
+	// block allocation added to. heapLive is recomputed at each GC from
+	// the marked bytes and blocks freed since then must not take it
+	// below that mark, so the estimate stays a valid heap size.
+	for {
+		live := gcController.heapLive.Load()
+		if live < gcController.heapMarked+regionBlockBytes {
+			break
+		}
+		if gcController.heapLive.CompareAndSwap(live, live-regionBlockBytes) {
+			break
+		}
+	}
+	systemstack(func() {
+		mheap_.freeSpan(s)
+	})
+}
+
+// releaseBlock drops r's ownership of s after its active lines have been
+// freed or pinned: the block is freed if empty, or made available to
+// other regions.
+func (r *regionState) releaseBlock(s *mspan) {
+	hdr := s.regionHdr()
+	hdr.owner = nil
+	hdr.next = nil
+	if hdr.pinned == 0 {
+		regionFreeBlock(s)
+		return
+	}
+	if hdr.pinned < regionLines {
+		lock(&regionLock)
+		s.regionRecycleNext = regionRecycle
+		regionRecycle = s
+		unlock(&regionLock)
+	}
+}
+
+// ---- Object lookup ---------------------------------------------------------
+
+// regionObjBase returns the base address of the object of region block s
+// that contains p, or 0 if p is not inside an allocated object.
+//
+//go:nosplit
+func (s *mspan) regionObjBase(p uintptr) uintptr {
+	data := s.regionData()
+	if p < data || p >= s.limit {
+		return 0
+	}
+	hdr := s.regionHdr()
+	w := (p - data) / goarch.PtrSize
+	i := w / 64
+	bits := hdr.start[i] & (^uint64(0) >> (63 - w%64))
+	// Objects are at most regionMaxObject bytes, so the start bit is
+	// within that many words.
+	for n := 0; bits == 0; n++ {
+		if i == 0 || n >= regionMaxObject/goarch.PtrSize/64 {
+			return 0
+		}
+		i--
+		bits = hdr.start[i]
+	}
+	b := i*64 + 63 - uintptr(sys.LeadingZeros64(bits))
+	if hdr.lines[b*goarch.PtrSize/regionLineBytes] == regionLineFree {
+		// A stale start bit in a freed line.
+		return 0
+	}
+	base := data + b*goarch.PtrSize
+	if p >= base+s.regionObjSize(base) {
+		return 0
+	}
+	return base
+}
+
+// regionObjSize returns the size of the object at base in region block s:
+// the distance to the next object start, bounded by the end of the
+// allocated area and the maximum object size.
+//
+//go:nosplit
+func (s *mspan) regionObjSize(base uintptr) uintptr {
+	hdr := s.regionHdr()
+	data := s.regionData()
+	w := (base - data) / goarch.PtrSize
+	i := w / 64
+	var bits uint64
+	if w%64 != 63 {
+		bits = hdr.start[i] &^ (^uint64(0) >> (63 - w%64))
+	}
+	for n := 0; bits == 0; n++ {
+		i++
+		if i >= regionBitWords || n >= regionMaxObject/goarch.PtrSize/64 {
+			end := data + uintptr(hdr.allocEnd)
+			if end <= base {
+				return goarch.PtrSize
+			}
+			if end-base > regionMaxObject {
+				return regionMaxObject
+			}
+			return end - base
+		}
+		bits = hdr.start[i]
+	}
+	n := i*64 + uintptr(sys.TrailingZeros64(bits))
+	size := (n - w) * goarch.PtrSize
+	if end := uintptr(hdr.allocEnd); end < n*goarch.PtrSize && data+end > base {
+		size = data + end - base
+	}
+	return size
+}
+
+// regionTypePointers returns the GC's pointer iterator for the object at
+// base of region block s. The iterator reads the block's pointer bitmap
+// through the synthetic type in the block header.
+//
+//go:nosplit
+func (s *mspan) regionTypePointers(base uintptr) typePointers {
+	hdr := s.regionHdr()
+	data := s.regionData()
+	w := (base - data) / goarch.PtrSize
+	addr := data + (w/64)*64*goarch.PtrSize
+	mask := uintptr(hdr.ptr[w/64]) &^ (1<<(w%64) - 1)
+	if end := w + s.regionObjSize(base)/goarch.PtrSize; end < (w/64+1)*64 {
+		mask &= 1<<(end%64) - 1
+	}
+	return typePointers{elem: data, addr: addr, mask: mask, typ: &hdr.typ}
+}
+
+// isRegionObject reports whether p points into a live object of r: an
+// object in an active line of a block owned by r that has not faded. It
+// returns the block and the object's base address.
 //
 //go:nosplit
 func (r *regionState) isRegionObject(p uintptr) (*mspan, uintptr, bool) {
 	s := spanOf(p)
-	if s == nil || s.region != r {
+	if s == nil || !s.isRegionBlock || s.state.get() != mSpanInUse {
 		return nil, 0, false
 	}
-	if s.state.get() != mSpanInUse || p < s.base() || p >= s.limit {
+	hdr := s.regionHdr()
+	if hdr.owner != r {
 		return nil, 0, false
 	}
-	idx := s.objIndex(p)
-	if bp, m := s.regionBase.bitp(idx); *bp&m != 0 {
+	base := s.regionObjBase(p)
+	if base == 0 {
 		return nil, 0, false
 	}
-	if bp, m := s.regionFaded.bitp(idx); *bp&m != 0 {
+	off := base - s.regionData()
+	if hdr.lines[off/regionLineBytes] != regionLineActive {
 		return nil, 0, false
 	}
-	return s, idx, true
+	w := off / goarch.PtrSize
+	if hdr.faded[w/64]&(1<<(w%64)) != 0 {
+		return nil, 0, false
+	}
+	return s, base, true
 }
 
-// isAllocated reports whether object idx of s is currently allocated
-// (see mspan.isFree): either below freeindex or marked in allocBits.
-// Pointers found by conservative scanning must pass this check before
-// their referent is treated as an object.
-//
-//go:nosplit
-func (s *mspan) isAllocatedIndex(idx uintptr) bool {
-	if idx < uintptr(s.freeindex) {
-		return true
-	}
-	bp, m := s.allocBits.bitp(idx)
-	return *bp&m != 0
-}
+// ---- Escape detection ------------------------------------------------------
 
-// wbRegion is called by compiled code after storing ptr into *slot
-// while the goroutine is inside a region. If ptr is a region object and
-// slot is outside the region, ptr is faded.
-//
-// The compiler calls this with the arguments in registers as uintptrs;
-// see cmd/compile/internal/ssa/writebarrier.go. It is nosplit so that
-// the common case (ptr is not an object of this region, or both ptr
-// and slot are) costs a span lookup and a few loads, with no
-// preemption bookkeeping.
+// wbRegion is called by compiled code after a pointer store *slot = ptr
+// when g.region != nil. The fast path rejects pointers that are not into
+// a block of the current region.
 //
 //go:nosplit
 func wbRegion(slot *uintptr, ptr uintptr) {
@@ -390,57 +899,68 @@ func wbRegion(slot *uintptr, ptr uintptr) {
 		return
 	}
 	s := spanOf(ptr)
-	if s == nil || s.region != r {
+	if s == nil || !s.isRegionBlock || s.regionHdr().owner != r {
 		return
+	}
+	if debug.regiontrace > 0 {
+		regionTracePC = sys.GetCallerPC()
 	}
 	wbRegionSlow(gp, r, uintptr(unsafe.Pointer(slot)), ptr)
 }
 
+//go:nosplit
 func wbRegionSlow(gp *g, r *regionState, slot, ptr uintptr) {
 	mp := acquirem()
 	if debug.regiontrace > 0 {
-		regionTracePC = sys.GetCallerPC()
+		regionStats.barrierCalls.Add(1)
 	}
 	regionCheckStore(gp, r, slot, ptr)
 	releasem(mp)
 }
 
-// regionTracePC is the PC of the store being checked, for GODEBUG=regiontrace=1.
 var regionTracePC uintptr
 
-// regionCheckStore implements the escape check for storing ptr into slot.
-// A slot of 0 means an unknown destination outside the region.
-// Must run with preemption disabled.
+// regionCheckStore handles the store *slot = ptr: if ptr is a live object
+// of r and slot is outside the region, the object fades.
 func regionCheckStore(gp *g, r *regionState, slot, ptr uintptr) {
-	s, idx, ok := r.isRegionObject(ptr)
-	if debug.regiontrace > 1 {
-		sp := spanOf(ptr)
-		print("region: store slot=", hex(slot), " ptr=", hex(ptr), " regionobj=", ok)
-		if sp != nil {
-			print(" span.region=", sp.region, " r=", r, " state=", sp.state.get())
-		} else {
-			print(" nospan")
-		}
-		print(" pc=", hex(regionTracePC), "\n")
-	}
-	if !ok {
-		return
-	}
-	// Destination inside this goroutine's stack? No other goroutine can
-	// read our stack, so nothing needs to happen now. Pointers left in
-	// frames older than the Do call are found by scanOuterStack when
-	// the region ends.
 	if gp.stack.lo <= slot && slot < gp.stack.hi {
+		// A stack slot. Older frames are scanned at exit.
 		return
 	}
-	// Destination inside a (non-faded) region object?
+	// Fast path: both the pointer and the slot are in active lines of
+	// the region's blocks that hold no faded object. Then both are live
+	// region objects and nothing escapes. (wbRegion has established
+	// that ptr is in a block owned by r.)
+	if ss := spanOf(slot); ss != nil && ss.isRegionBlock && ss.state.get() == mSpanInUse && ss.regionHdr().owner == r && slot >= ss.regionData() {
+		ps := spanOf(ptr)
+		if ps != nil && ps.isRegionBlock && ps.state.get() == mSpanInUse && ps.regionHdr().owner == r && ptr >= ps.regionData() &&
+			ps.regionHdr().lineLiveUnfaded((ptr-ps.regionData())/regionLineBytes) && ss.regionHdr().lineLiveUnfaded((slot-ss.regionData())/regionLineBytes) {
+			return
+		}
+	}
+	s, base, ok := r.isRegionObject(ptr)
+	if !ok {
+		if debug.regioncheck != 0 {
+			regionCheckDangling(ptr, slot)
+		}
+		return
+	}
 	if _, _, ok := r.isRegionObject(slot); ok {
 		return
 	}
+	for i := 0; i < r.nadopted; i++ {
+		if a := &r.adopted[i]; a.base <= slot && slot < a.base+a.size {
+			return
+		}
+	}
 	if debug.regiontrace > 0 {
-		print("region: fade obj=", hex(ptr), " size=", s.elemsize, " noscan=", s.spanclass.noscan(), " slot=", hex(slot))
+		print("region: fade obj=", hex(base), " size=", s.regionObjSize(base), " slot=", hex(slot))
 		if ss := spanOf(slot); ss != nil && ss.state.get() == mSpanInUse {
-			print(" (heap object size=", ss.elemsize, ")")
+			if ss.isRegionBlock {
+				print(" (region block, faded or pinned object)")
+			} else {
+				print(" (heap object size=", ss.elemsize, ")")
+			}
 		} else {
 			print(" (global or non-heap)")
 		}
@@ -455,11 +975,11 @@ func regionCheckStore(gp *g, r *regionState, slot, ptr uintptr) {
 		}
 		print("\n")
 	}
-	r.fade(s, idx)
+	r.fade(s, base)
 }
 
-// wbRegionMove is called by compiled code before a typed bulk copy of
-// typ from src to dst while the goroutine is inside a region.
+// wbRegionMove is called by compiled code after a typed move into *dst
+// when g.region != nil: every pointer now in *dst is checked.
 func wbRegionMove(typ *_type, dst, src unsafe.Pointer) {
 	gp := getg()
 	r := gp.region
@@ -471,18 +991,14 @@ func wbRegionMove(typ *_type, dst, src unsafe.Pointer) {
 	releasem(mp)
 }
 
-// regionBulkCheck checks every pointer word of [src, src+size) that is
-// about to be copied to the corresponding word of dst. typ describes the
-// layout if non-nil; otherwise every aligned word is treated as a
-// potential pointer (conservative, which only fades more). A dst of 0
-// means the destination is unknown and outside the region.
-// Must run with preemption disabled.
+// regionBulkCheck checks the pointers of the size bytes at src, of type
+// typ (nil: every word), as if they had been stored to the corresponding
+// slots at dst. dst == 0 means an unknown destination outside the region.
 func regionBulkCheck(gp *g, r *regionState, dst, src, size uintptr, typ *_type) {
 	if typ != nil && !typ.Pointers() {
 		return
 	}
 	if typ != nil {
-		// Walk the type's pointer mask, tiling over array elements.
 		ptrmask := getGCMask(typ)
 		for off := uintptr(0); off < size; off += typ.Size_ {
 			for i := uintptr(0); i < typ.PtrBytes; i += goarch.PtrSize {
@@ -508,84 +1024,75 @@ func regionBulkCheck(gp *g, r *regionState, dst, src, size uintptr, typ *_type) 
 	}
 }
 
-// regionFadePtr fades the region object p points into, if any. Used for
-// pointers that become visible outside the goroutine through paths the
-// write barrier does not see (go statements, specials, finalizer funcs).
+// regionFadePtr fades the object p if it is a live object of gp's region.
+// Used where a pointer becomes reachable from outside the goroutine in a
+// way the store barrier does not see (go statements, specials).
 func regionFadePtr(gp *g, p uintptr) {
 	r := gp.region
 	if r == nil || p == 0 {
 		return
 	}
 	mp := acquirem()
-	if s, idx, ok := r.isRegionObject(p); ok {
+	if s, base, ok := r.isRegionObject(p); ok {
 		if debug.regiontrace > 0 {
-			print("region: fade-ptr obj=", hex(p), " size=", s.elemsize, " noscan=", s.spanclass.noscan(), " pc=", hex(sys.GetCallerPC()), "\n")
+			print("region: fade-ptr obj=", hex(base), " size=", s.regionObjSize(base), " pc=", hex(sys.GetCallerPC()), "\n")
 		}
-		r.fade(s, idx)
+		r.fade(s, base)
 	}
 	releasem(mp)
 }
 
-// fade marks object idx of span s, and transitively every region object
-// reachable from it, as faded. Must run with preemption disabled.
-func (r *regionState) fade(s *mspan, idx uintptr) {
-	r.markFaded(s, idx)
-	r.push(s.base() + idx*s.elemsize)
-	pops := 0
+// fade marks the object at base of block s and, transitively, every
+// live region object reachable from it as escaped.
+func (r *regionState) fade(s *mspan, base uintptr) {
+	r.markFaded(s, base)
+	r.push(base)
 	for r.sp > 0 {
-		if pops++; pops > 1<<24 {
-			print("region: fade outer loop, sp=", r.sp, " faded=", r.faded, " poisoned=", r.poisoned, "\n")
-			throw("region: fade outer loop")
-		}
 		r.sp--
 		base := r.stack[r.sp]
 		sp := spanOf(base)
-		if sp.spanclass.noscan() {
-			continue
-		}
-		if debug.regiontrace > 1 {
-			print("region:   walk obj=", hex(base), " size=", sp.elemsize, " spc=", sp.spanclass, " objBase=", hex(sp.objBase(base)), " word0=", hex(*(*uintptr)(unsafe.Pointer(sp.objBase(base)))))
-			if heapBitsInSpan(sp.elemsize) {
-				print(" hbits=", hex(sp.heapBitsSmallForAddr(sp.objBase(base))), " nelems=", sp.nelems, " npages=", sp.npages)
+		hdr := sp.regionHdr()
+		data := sp.regionData()
+		w := (base - data) / goarch.PtrSize
+		end := w + sp.regionObjSize(base)/goarch.PtrSize
+		for i := w / 64; i*64 < end; i++ {
+			bits := hdr.ptr[i]
+			if i == w/64 {
+				bits &^= 1<<(w%64) - 1
 			}
-			print("\n")
-		}
-		// Enumerate the pointer words of the object.
-		tp := sp.typePointersOfUnchecked(sp.objBase(base))
-		limit := sp.objBase(base) + sp.elemsize
-		guard := 0
-		for {
-			var addr uintptr
-			if tp, addr = tp.next(limit); addr == 0 {
-				break
-			}
-			if guard++; guard > 1<<20 {
-				print("region: fade loop on obj=", hex(base), " objBase=", hex(sp.objBase(base)), " elemsize=", sp.elemsize, " spc=", sp.spanclass, " addr=", hex(addr), " limit=", hex(limit), " tp.typ=", tp.typ, " tp.elem=", hex(tp.elem), " tp.addr=", hex(tp.addr), "\n")
-				throw("region: fade loop")
-			}
-			q := *(*uintptr)(unsafe.Pointer(addr))
-			if q == 0 {
-				continue
-			}
-			if qs, qidx, ok := r.isRegionObject(q); ok {
-				if debug.regiontrace > 1 {
-					print("region:   fade-transitive obj=", hex(qs.base()+qidx*qs.elemsize), " via=", hex(addr), " size=", qs.elemsize, " noscan=", qs.spanclass.noscan(), "\n")
+			for bits != 0 {
+				b := i*64 + uintptr(sys.TrailingZeros64(bits))
+				bits &= bits - 1
+				if b >= end {
+					break
 				}
-				r.markFaded(qs, qidx)
-				r.push(qs.base() + qidx*qs.elemsize)
+				q := *(*uintptr)(unsafe.Pointer(data + b*goarch.PtrSize))
+				if q == 0 {
+					continue
+				}
+				if qs, qbase, ok := r.isRegionObject(q); ok {
+					r.markFaded(qs, qbase)
+					r.push(qbase)
+				}
 			}
 		}
 	}
 }
 
-func (r *regionState) markFaded(s *mspan, idx uintptr) {
-	bp, m := s.regionFaded.bitp(idx)
-	*bp |= m
-	if debug.regiontrace > 0 {
-		print("region:   markFaded span=", hex(s.base()), " idx=", idx, " elemsize=", s.elemsize, " faded=", s.regionFaded, " byte=", hex(*bp), " region=", s.region, "\n")
+func (r *regionState) markFaded(s *mspan, base uintptr) {
+	hdr := s.regionHdr()
+	w := (base - s.regionData()) / goarch.PtrSize
+	hdr.faded[w/64] |= 1 << (w % 64)
+	hdr.nfaded++
+	size := s.regionObjSize(base)
+	for l := w * goarch.PtrSize / regionLineBytes; l <= (w*goarch.PtrSize+size-1)/regionLineBytes && l < regionLines; l++ {
+		hdr.fadedLines[l/64] |= 1 << (l % 64)
+	}
+	if hdr.dbg != nil {
+		hdr.dbg[w] |= regionDbgFaded
 	}
 	r.faded++
-	r.fadedBytes += uint64(s.elemsize)
+	r.fadedBytes += uint64(size)
 }
 
 func (r *regionState) push(p uintptr) {
@@ -593,7 +1100,6 @@ func (r *regionState) push(p uintptr) {
 		return
 	}
 	if r.sp == len(r.stack) {
-		// Give up on precision: keep everything.
 		r.poisoned = true
 		r.sp = 0
 		return
@@ -602,404 +1108,771 @@ func (r *regionState) push(p uintptr) {
 	r.sp++
 }
 
-// refillFull is called by mcache.refill when the region's current span
-// for a class is full: keep it owned by the region instead of returning
-// it to the mcentral.
-func (r *regionState) keepFull(s *mspan) {
-	s.regionNext = r.full
-	r.full = s
+// ---- sync.Pool adoption ----------------------------------------------------
+
+// regionAdopt records that the region holds the pooled object p, so that
+// stores into it do not fade region objects. It reports false if the
+// region cannot adopt more objects.
+//
+//go:linkname sync_runtime_regionAdopt sync.runtime_regionAdopt
+func sync_runtime_regionAdopt(p unsafe.Pointer) bool {
+	gp := getg()
+	r := gp.region
+	if r == nil || p == nil {
+		return true
+	}
+	mp := acquirem()
+	s := spanOf(uintptr(p))
+	if s == nil || s.state.get() != mSpanInUse || s.isRegionBlock {
+		releasem(mp)
+		return true
+	}
+	if r.nadopted == len(r.adopted) {
+		releasem(mp)
+		return false
+	}
+	base := s.objBase(uintptr(p))
+	r.adopted[r.nadopted] = regionAdopted{base, s.elemsize}
+	r.nadopted++
+	// Adopt the heap objects the pooled object points to as well
+	// (buffers, stacks of a pooled encoder...), as far as there is room.
+	r.adoptReferents(s, base, 2)
+	releasem(mp)
+	return true
 }
 
-// freeAll frees every unfaded region object in the region's spans and
-// prepares the spans for reuse by the next region. Must run with
-// preemption disabled and gcphase == _GCoff.
-func (r *regionState) freeAll() {
-	c := r.c
-	// Reusable (freegc) lists point into slots we are about to free.
-	clear(c.reusableNoscan[:])
-	c.tiny = 0
-	c.tinyoffset = 0
-
-	freedObjs, freedBytes := uint64(0), uint64(0)
-	reset := func(s *mspan) {
-		n, b := r.resetSpan(s)
-		freedObjs += n
-		freedBytes += b
-	}
-	for i := range c.alloc {
-		if s := c.alloc[i]; s != &emptymspan && s.region == r {
-			reset(s)
-		}
-	}
-	// Full spans: reset, then either keep one per class as the current
-	// span (preferring the emptiest), or return the rest.
-	for s := r.full; s != nil; {
-		next := s.regionNext
-		s.regionNext = nil
-		reset(s)
-		spc := s.spanclass
-		cur := c.alloc[spc]
-		if cur == &emptymspan || cur.allocCount > s.allocCount {
-			if cur != &emptymspan {
-				r.returnSpan(cur)
-			}
-			c.alloc[spc] = s
-		} else {
-			r.returnSpan(s)
-		}
-		s = next
-	}
-	r.full = nil
-	regionStats.freedRegions.Add(1)
-	regionStats.freedObjects.Add(int64(freedObjs))
-	regionStats.freedBytes.Add(int64(freedBytes))
-}
-
-// abandonAll turns every object allocated in the region so far into a
-// foreign object (never freed by a region), without releasing the
-// spans. Must run with preemption disabled.
-func (r *regionState) abandonAll() {
-	c := r.c
-	clear(c.reusableNoscan[:])
-	c.tiny = 0
-	c.tinyoffset = 0
-	for i := range c.alloc {
-		if s := c.alloc[i]; s != &emptymspan && s.region == r {
-			r.abandonSpan(s)
-		}
-	}
-	for s := r.full; s != nil; s = s.regionNext {
-		r.abandonSpan(s)
-	}
-}
-
-// abandonSpan marks all allocated objects of s as foreign.
-func (r *regionState) abandonSpan(s *mspan) {
-	bw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionBase))
-	fw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionFaded))
-	aw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.allocBits))
-	nwords := regionBitsWords(s.nelems)
-	fi := uintptr(s.freeindex)
-	for i := uintptr(0); i < nwords; i++ {
-		w := bw[i] | fw[i] | aw[i]
-		if i < fi/64 {
-			w = ^uint64(0)
-		} else if i == fi/64 && fi%64 != 0 {
-			w |= 1<<(fi%64) - 1
-		}
-		bw[i] = w
-		fw[i] = 0
-	}
-	// The region's allocations are now accounted as ordinary ones.
-	allocated := int64(s.allocCount) - int64(s.allocCountBeforeCache)
-	if allocated > 0 {
-		stats := memstats.heapStats.acquire()
-		atomic.Xadd64(&stats.smallAllocCount[s.spanclass.sizeclass()], allocated)
-		memstats.heapStats.release()
-		gcController.totalAlloc.Add(allocated * int64(s.elemsize))
-	}
-	s.allocCountBeforeCache = s.allocCount
-}
-
-// resetSpan frees the unfaded region objects of s: the new allocation
-// bitmap is the foreign objects plus the faded ones, which become
-// foreign for the next region. Returns the number of objects and bytes
-// freed.
-func (r *regionState) resetSpan(s *mspan) (uint64, uint64) {
-	regionStats.spanResets.Add(1)
-	if debug.regiontrace > 0 {
-		print("region:   reset span=", hex(s.base()), " elemsize=", s.elemsize, " nelems=", s.nelems, " allocCount=", s.allocCount, " faded=", s.regionFaded, " fw0=", hex(*(*uint64)(unsafe.Pointer(s.regionFaded))), " bw0=", hex(*(*uint64)(unsafe.Pointer(s.regionBase))), " aw0=", hex(*(*uint64)(unsafe.Pointer(s.allocBits))), "\n")
-	}
-	before := s.allocCount
-	// base |= faded; allocBits = base; faded = 0
-	bw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionBase))
-	fw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionFaded))
-	aw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.allocBits))
-	nwords := regionBitsWords(s.nelems)
-	count := 0
-	for i := uintptr(0); i < nwords; i++ {
-		w := bw[i] | fw[i]
-		if i == nwords-1 && s.nelems%64 != 0 {
-			// Bits at or beyond nelems are meaningless; keep them clear.
-			w &= ^uint64(0) >> (64 - uint(s.nelems%64))
-		}
-		bw[i] = w
-		fw[i] = 0
-		aw[i] = w
-		count += sys.OnesCount64(w)
-	}
-	if debug.clobberfree != 0 {
-		// Poison freed slots to make use-after-free visible.
-		for idx := uintptr(0); idx < uintptr(s.nelems); idx++ {
-			if bp, m := s.allocBits.bitp(idx); *bp&m == 0 {
-				clobberfree(unsafe.Pointer(s.base()+idx*s.elemsize), s.elemsize)
-			}
-		}
-	}
-	s.allocCount = uint16(count)
-	s.freeindex = 0
-	s.freeIndexForScan = 0
-	s.refillAllocCache(0)
-	s.needzero = 1
-
-	// Every object with a special must have been faded (see addspecial);
-	// a special on a freed slot would be attached to its next occupant.
-	for sp := s.specials; sp != nil; sp = sp.next {
-		idx := uintptr(sp.offset) / s.elemsize
-		if bp, m := s.allocBits.bitp(idx); *bp&m == 0 {
-			print("region: freed object with special: span=", hex(s.base()), " elemsize=", s.elemsize, " idx=", idx, " kind=", sp.kind, " faded=", r.faded, "\n")
-			throw("region: freed object with special")
-		}
-	}
-
-	freed := uint64(0)
-	if before > uint16(count) {
-		freed = uint64(before - uint16(count))
-	}
-	// Account the objects allocated in this span since the cache last
-	// accounted for it (allocCountBeforeCache) as allocated, and the
-	// unfaded ones as freed, so that Mallocs/Frees and the pacer's
-	// totalAlloc-totalFree stay consistent. Objects of spans that
-	// filled up were already accounted by refill (which then set
-	// allocCountBeforeCache = allocCount).
-	allocated := int64(before) - int64(s.allocCountBeforeCache)
-	stats := memstats.heapStats.acquire()
-	if allocated > 0 {
-		atomic.Xadd64(&stats.smallAllocCount[s.spanclass.sizeclass()], allocated)
-		gcController.totalAlloc.Add(allocated * int64(s.elemsize))
-	}
-	if freed > 0 {
-		atomic.Xadd64(&stats.smallFreeCount[s.spanclass.sizeclass()], int64(freed))
-		gcController.totalFree.Add(int64(freed) * int64(s.elemsize))
-	}
-	memstats.heapStats.release()
-	if freed > 0 && !s.spanclass.noscan() {
-		// The pacer's estimate of scannable heap grew when these
-		// objects were allocated; they are gone now. Without this the
-		// estimate grows with every region and triggers cycles early.
-		gcController.update(0, -int64(freed)*int64(s.elemsize))
-	}
-	s.allocCountBeforeCache = s.allocCount
-	return freed, freed * uint64(s.elemsize)
-}
-
-// returnSpan gives a reset span back to the heap or its mcentral.
-// Must run with preemption disabled.
-func (r *regionState) returnSpan(s *mspan) {
-	regionUncacheSpan(s)
-}
-
-// regionUncacheSpan releases a span cached by a region: to the heap if
-// no object in it is allocated (uncacheSpan does not accept empty
-// spans; a region span can be empty after a bulk free), otherwise to
-// its mcentral through the usual protocol.
-func regionUncacheSpan(s *mspan) {
-	if s.sweepgen == mheap_.sweepgen+1 {
-		// About to be swept: check for region-freed objects that the
-		// collector found reachable (dangling references).
-		regionCheckZombies(s)
-	}
-	untagRegionSpan(s)
-	if s.allocCount != 0 {
-		mheap_.central[s.spanclass].mcentral.uncacheSpan(s)
+// adoptReferents adopts the heap objects referenced from the object at
+// base of span s, to the given depth, while the adopted list has room.
+func (r *regionState) adoptReferents(s *mspan, base uintptr, depth int) {
+	if depth == 0 || s.spanclass.noscan() {
 		return
 	}
-	// Completely free. Nothing in it can be marked: regions never free
-	// while the collector is marking.
-	sg := mheap_.sweepgen
-	if s.sweepgen != sg+3 && s.sweepgen != sg+1 {
-		throw("region: bad sweepgen on empty region span")
+	tp := s.typePointersOfUnchecked(base)
+	limit := base + s.elemsize
+	for {
+		var addr uintptr
+		if tp, addr = tp.next(limit); addr == 0 {
+			break
+		}
+		q := *(*uintptr)(unsafe.Pointer(addr))
+		if q == 0 {
+			continue
+		}
+		qs := spanOfHeap(q)
+		if qs == nil || qs.isRegionBlock {
+			continue
+		}
+		qbase := qs.objBase(q)
+		dup := false
+		for i := 0; i < r.nadopted; i++ {
+			if r.adopted[i].base == qbase {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		if r.nadopted == len(r.adopted) {
+			return
+		}
+		r.adopted[r.nadopted] = regionAdopted{qbase, qs.elemsize}
+		r.nadopted++
+		r.adoptReferents(qs, qbase, depth-1)
 	}
-	atomic.Store(&s.sweepgen, sg)
-	s.needzero = 1
-	systemstack(func() {
-		mheap_.freeSpan(s)
-	})
 }
 
-// flush hands all spans of the region cache back to the mcentrals,
-// demoting their objects to ordinary heap objects. Used at GC mark
-// termination (world stopped), when a region is abandoned, and when a
-// goroutine dies.
-func (r *regionState) flush() {
-	c := r.c
-	for s := r.full; s != nil; {
-		next := s.regionNext
-		s.regionNext = nil
-		// Full spans count as fully allocated for the pacer already
-		// (refill overestimates), so no heapLive adjustment is needed.
-		// An in-place sweep may have emptied the span; regionUncacheSpan
-		// handles that.
-		regionUncacheSpan(s)
+// regionUnadopt is called when p is returned to a pool. It reports
+// whether the object may be pooled: objects of the region itself may not
+// (they are freed at exit); adopted objects are released first, which
+// fades any region object still referenced from them.
+//
+//go:linkname sync_runtime_regionUnadopt sync.runtime_regionUnadopt
+func sync_runtime_regionUnadopt(p unsafe.Pointer) bool {
+	gp := getg()
+	r := gp.region
+	if r == nil || p == nil {
+		return true
+	}
+	mp := acquirem()
+	s := spanOf(uintptr(p))
+	if s == nil || s.state.get() != mSpanInUse {
+		releasem(mp)
+		return true
+	}
+	if s.isRegionBlock {
+		releasem(mp)
+		return false
+	}
+	for i := 0; i < r.nadopted; i++ {
+		if a := r.adopted[i]; a.base <= uintptr(p) && uintptr(p) < a.base+a.size {
+			r.releaseAdoptedAt(i)
+			break
+		}
+	}
+	releasem(mp)
+	return true
+}
+
+func (r *regionState) releaseAdoptedAt(i int) {
+	a := r.adopted[i]
+	r.nadopted--
+	r.adopted[i] = r.adopted[r.nadopted]
+	regionBulkCheck(r.owner, r, 0, a.base, a.size, nil)
+}
+
+// releaseAdopted releases every adopted object at region exit.
+func (r *regionState) releaseAdopted() {
+	for r.nadopted > 0 {
+		r.releaseAdoptedAt(r.nadopted - 1)
+	}
+}
+
+// ---- Region exit -----------------------------------------------------------
+
+// finish ends the region: faded objects pin their lines, every other
+// active line is freed (or, when abandoning, pinned), and blocks other
+// than the current one are released.
+func (r *regionState) finish(abandon bool) {
+	r.closeRun()
+	var freedLines, freedObjs uint64
+	for s := r.blocks; s != nil; {
+		hdr := s.regionHdr()
+		next := hdr.next
+		hdr.next = nil
+		if abandon {
+			for l := uintptr(hdr.activeLo); l < uintptr(hdr.activeHi); l++ {
+				if hdr.lines[l] == regionLineActive {
+					hdr.lines[l] = regionLinePinned
+					hdr.pinned++
+					if hdr.dbg != nil {
+						mask, i := lineBitMask(l)
+						for bits := hdr.start[i] & mask; bits != 0; bits &= bits - 1 {
+							hdr.dbg[i*64+uintptr(sys.TrailingZeros64(bits))] |= regionDbgAbandoned
+						}
+					}
+				}
+			}
+			hdr.activeLo, hdr.activeHi = 0, 0
+		} else {
+			r.pinFaded(s)
+			s.regionFreeSpecials()
+			fl, fo := s.regionFreeActiveLines()
+			freedLines += fl
+			freedObjs += fo
+		}
+		hdr.nfaded = 0
+		if s != r.cur {
+			r.releaseBlock(s)
+		}
 		s = next
 	}
-	r.full = nil
-	c.releaseAll() // also untags the cached spans
-	c.flushGen.Store(mheap_.sweepgen)
-	regionStats.flushes.Add(1)
-}
+	r.blocks = nil
+	r.cursor, r.limit, r.activeTo = 0, 0, 0
+	if r.cur != nil && r.cur.regionHdr().pinned == regionLines {
+		r.releaseBlock(r.cur)
+		r.cur = nil
+	}
 
-// regionSweepAll sweeps the spans cached by every region in place.
-// Called during the mark termination stop-the-world, after the sweep
-// generation has advanced. The spans stay cached: releasing them and
-// re-acquiring them after every cycle made the pacer count each region's
-// working set as fresh allocation every cycle, which at low GOGC fed
-// back into more cycles. Objects that died are freed by the sweep and
-// leave the region bitmaps; objects that survived keep their region
-// status.
-func regionSweepAll() {
-	lock(&allRegionsLock)
-	for r := allRegions; r != nil; r = r.next {
-		r.sweepInPlace()
+	// Account the region's memory by lines: the lines it claimed as
+	// allocated (large objects, in the heap statistics) and the lines
+	// freed now as freed; lines that stay pinned are freed by the GC
+	// sweep, which accounts them the same way. Object sizes are not
+	// used because the size of an object is only known up to the next
+	// object start, which the GC may have removed.
+	allocBytes := r.claimedLines * regionLineBytes
+	freedBytes := freedLines * regionLineBytes
+	stats := memstats.heapStats.acquire()
+	atomic.Xadd64(&stats.largeAllocCount, int64(r.allocs))
+	atomic.Xadd64(&stats.largeAlloc, int64(allocBytes))
+	atomic.Xadd64(&stats.largeFreeCount, int64(freedObjs))
+	atomic.Xadd64(&stats.largeFree, int64(freedBytes))
+	memstats.heapStats.release()
+	gcController.totalAlloc.Add(int64(allocBytes))
+	gcController.totalFree.Add(int64(freedBytes))
+	// The pacer: pointerful bytes that escaped add to the scannable heap.
+	if r.fadedBytes < r.scanBytes {
+		gcController.update(0, int64(r.fadedBytes))
+	} else {
+		gcController.update(0, int64(r.scanBytes))
 	}
-	unlock(&allRegionsLock)
-}
-
-// sweepInPlace sweeps every span of the region cache and keeps it cached.
-// Must run with the world stopped, right after mheap_.sweepgen advanced.
-func (r *regionState) sweepInPlace() {
-	c := r.c
-	sg := mheap_.sweepgen
-	// The tiny block and reusable objects may be freed by the sweep.
-	clear(c.reusableNoscan[:])
-	c.tiny = 0
-	c.tinyoffset = 0
-	c.scanAlloc = 0 // heapScan is recomputed at mark termination
-
-	one := func(s *mspan) {
-		if s.sweepgen != sg+1 {
-			print("runtime: region span sweepgen=", s.sweepgen, " heap sweepgen=", sg, "\n")
-			throw("region: bad sweepgen on cached span at mark termination")
-		}
-		regionCheckZombies(s)
-		// Allocations since the span was cached are accounted the way
-		// releaseAll accounts them.
-		if used := int64(s.allocCount) - int64(s.allocCountBeforeCache); used > 0 {
-			stats := memstats.heapStats.acquire()
-			atomic.Xadd64(&stats.smallAllocCount[s.spanclass.sizeclass()], used)
-			memstats.heapStats.release()
-			gcController.totalAlloc.Add(used * int64(s.elemsize))
-		}
-		atomic.Store(&s.sweepgen, sg-1)
-		ss := sweepLocked{s}
-		ss.sweep(true)
-		// Cached and swept.
-		atomic.Store(&s.sweepgen, sg+3)
-		// Dead objects leave the region bitmaps.
-		bw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionBase))
-		fw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.regionFaded))
-		aw := (*[regionBitsBytes / 8]uint64)(unsafe.Pointer(s.allocBits))
-		for i := uintptr(0); i < regionBitsWords(s.nelems); i++ {
-			bw[i] &= aw[i]
-			fw[i] &= aw[i]
-		}
-		s.allocCountBeforeCache = s.allocCount
-	}
-	for i := range c.alloc {
-		if s := c.alloc[i]; s != &emptymspan && s.region == r {
-			one(s)
-		}
-	}
-	for s := r.full; s != nil; s = s.regionNext {
-		one(s)
-	}
-	c.flushGen.Store(sg)
-	regionStats.flushes.Add(1)
-}
-
-// regionMCache returns the allocation cache to use for an allocation by
-// gp, which is mp.curg: the region's if gp is inside a region and not
-// in region.Ignore, otherwise nil.
-//
-//go:nosplit
-func regionMCache(mp *m) *mcache {
-	gp := mp.curg
-	if gp == nil || gp != getg() {
-		return nil
-	}
-	r := gp.region
-	if r == nil || r.ignore != 0 {
-		return nil
-	}
-	return r.c
-}
-
-// regionCheckZombies looks for objects of s that a region freed but the
-// collector marked in the cycle that just ended: a dangling reference.
-// For each one it prints the referrers it can find by scanning the
-// heap, stacks and globals conservatively, then throws. Debug aid.
-func regionCheckZombies(s *mspan) {
-	for idx := uintptr(s.freeindex); idx < uintptr(s.nelems); idx++ {
-		if !s.markBitsForIndex(idx).isMarked() {
-			continue
-		}
-		if bp, m := s.allocBits.bitp(idx); *bp&m != 0 {
-			continue
-		}
-		addr := s.base() + idx*s.elemsize
-		print("region: zombie obj=", hex(addr), " size=", s.elemsize, " noscan=", s.spanclass.noscan(), " idx=", idx, " freeindex=", s.freeindex, " region=", s.region, "\n")
-		if bp, m := s.regionBase.bitp(idx); *bp&m != 0 {
-			print("region:   (foreign bit set)\n")
-		}
-		if bp, m := s.regionFaded.bitp(idx); *bp&m != 0 {
-			print("region:   (faded bit set)\n")
-		}
-		regionFindReferrers(addr, s.elemsize)
-		throw("region: freed object is reachable")
+	if !abandon {
+		regionStats.freedRegions.Add(1)
+		regionStats.freedObjects.Add(int64(freedObjs))
+		regionStats.freedBytes.Add(int64(freedBytes))
 	}
 }
 
-func regionFindReferrers(addr, size uintptr) {
-	hit := func(p uintptr) bool { return p >= addr && p < addr+size }
-	// Heap.
-	for _, sp := range mheap_.allspans {
-		if sp.state.get() != mSpanInUse {
-			continue
-		}
-		n := uintptr(sp.nelems)
-		for i := uintptr(0); i < n; i++ {
-			base := sp.base() + i*sp.elemsize
-			for off := uintptr(0); off < sp.elemsize; off += goarch.PtrSize {
-				if hit(*(*uintptr)(unsafe.Pointer(base + off))) {
-					print("region:   referrer heap obj=", hex(base), " size=", sp.elemsize, " noscan=", sp.spanclass.noscan(), " off=", off, " region=", sp.region, " allocated=", sp.isAllocatedIndex(i), " marked=", sp.markBitsForIndex(i).isMarked())
-					if sp.region != nil {
-						fb, fm := sp.regionFaded.bitp(i)
-						bb, bm := sp.regionBase.bitp(i)
-						print(" faded=", *fb&fm != 0, " foreign=", *bb&bm != 0)
-					}
-					print("\n")
-					dumpEnd := base + 64
-					if dumpEnd > base+sp.elemsize {
-						dumpEnd = base + sp.elemsize
-					}
-					hexdumpWords(base, dumpEnd, nil)
-					break
+// pinFaded pins the lines of every faded object of s.
+func (r *regionState) pinFaded(s *mspan) {
+	hdr := s.regionHdr()
+	if hdr.nfaded == 0 {
+		return
+	}
+	data := s.regionData()
+	var newly [regionLines]bool
+	for i := range hdr.faded {
+		bits := hdr.faded[i]
+		for bits != 0 {
+			w := uintptr(i)*64 + uintptr(sys.TrailingZeros64(bits))
+			bits &= bits - 1
+			base := data + w*goarch.PtrSize
+			size := s.regionObjSize(base)
+			for l := w * goarch.PtrSize / regionLineBytes; l <= (w*goarch.PtrSize+size-1)/regionLineBytes && l < regionLines; l++ {
+				if hdr.lines[l] == regionLineActive {
+					hdr.lines[l] = regionLinePinned
+					hdr.pinned++
+					newly[l] = true
 				}
 			}
 		}
 	}
-	// Stacks.
-	forEachG(func(gp *g) {
-		if gp.stack.lo == 0 || readgstatus(gp) == _Gdead {
+	// The other objects of the newly pinned lines are dead: they were
+	// accounted as freed with the rest of the region, so they must not
+	// be counted again when the line is freed by the GC. Drop them,
+	// clearing their pointer bits so that no scan reads them. (Lines
+	// pinned earlier hold objects the GC owns, faded or abandoned, and
+	// are left alone.)
+	for l := uintptr(hdr.activeLo); l < uintptr(hdr.activeHi); l++ {
+		if !newly[l] {
+			continue
+		}
+		mask, i := lineBitMask(l)
+		dead := hdr.start[i] & mask &^ hdr.faded[i]
+		for bits := dead; bits != 0; bits &= bits - 1 {
+			w := i*64 + uintptr(sys.TrailingZeros64(bits))
+			hdr.clearPtrBits(w, s.regionObjSize(data+w*goarch.PtrSize)/goarch.PtrSize)
+		}
+		hdr.start[i] &^= dead
+	}
+}
+
+// clearPtrBits clears n pointer bits starting at word w.
+func (hdr *regionBlockHdr) clearPtrBits(w, n uintptr) {
+	for e := w + n; w < e; {
+		k := min(64-w%64, e-w)
+		hdr.ptr[w/64] &^= (1<<k - 1) << (w % 64)
+		w += k
+	}
+}
+
+// regionFreeActiveLines frees every active line of s. It returns the
+// number of lines and of objects freed.
+//
+// The start bits of the freed objects are kept: they bound the size of
+// the preceding object exactly (see regionObjSize) and are cleared when
+// the line is claimed again. Lookups ignore objects in free lines.
+func (s *mspan) regionFreeActiveLines() (lines, objs uint64) {
+	hdr := s.regionHdr()
+	data := s.regionData()
+	for l := uintptr(hdr.activeLo); l < uintptr(hdr.activeHi); l++ {
+		if hdr.lines[l] != regionLineActive {
+			continue
+		}
+		hdr.lines[l] = regionLineFree
+		lines++
+		mask, i := lineBitMask(l)
+		// Clear the pointer bits of the dead objects over their whole
+		// extent: an object may end in a later line that stays pinned
+		// for the sake of another object, and a stale pointer bit
+		// there would be scanned as part of its (inflated) predecessor.
+		for bits := hdr.start[i] & mask; bits != 0; bits &= bits - 1 {
+			w := i*64 + uintptr(sys.TrailingZeros64(bits))
+			if hdr.dbg == nil || hdr.dbg[w]&regionDbgSentinel == 0 {
+				objs++
+			}
+			hdr.clearPtrBits(w, s.regionObjSize(data+w*goarch.PtrSize)/goarch.PtrSize)
+		}
+		hdr.ptr[i] &^= mask
+		hdr.faded[i] &^= mask
+		if debug.clobberfree != 0 {
+			clobberfree(unsafe.Pointer(data+l*regionLineBytes), regionLineBytes)
+		}
+	}
+	if lines > 0 {
+		s.needzero = 1
+	}
+	hdr.activeLo, hdr.activeHi = 0, 0
+	return
+}
+
+// lineBitMask returns the mask of the bits of line l within the bitmap
+// word that holds them, and the index of that word.
+func lineBitMask(l uintptr) (uint64, uintptr) {
+	const perWord = 64 / regionLineWords
+	return (uint64(1)<<regionLineWords - 1) << ((l % perWord) * regionLineWords), l / perWord
+}
+
+// clearLineBits clears the start, pointer and faded bits of line l.
+func (hdr *regionBlockHdr) clearLineBits(l uintptr) {
+	mask, i := lineBitMask(l)
+	hdr.start[i] &^= mask
+	hdr.ptr[i] &^= mask
+	hdr.faded[i] &^= mask
+	hdr.fadedLines[l/64] &^= 1 << (l % 64)
+}
+
+// lineLiveUnfaded reports whether line l is active and holds no faded
+// object, in which case every object in it is a live region object.
+//
+//go:nosplit
+func (hdr *regionBlockHdr) lineLiveUnfaded(l uintptr) bool {
+	return hdr.lines[l] == regionLineActive && hdr.fadedLines[l/64]>>(l%64)&1 == 0
+}
+
+// lineObjectBytes returns the number and total size of the objects
+// starting in line l.
+func (s *mspan) lineObjectBytes(l uintptr) (objs, bytes uint64) {
+	hdr := s.regionHdr()
+	mask, i := lineBitMask(l)
+	bits := hdr.start[i] & mask
+	for bits != 0 {
+		w := i*64 + uintptr(sys.TrailingZeros64(bits))
+		bits &= bits - 1
+		objs++
+		bytes += uint64(s.regionObjSize(s.regionData() + w*goarch.PtrSize))
+	}
+	return
+}
+
+// ---- GC integration --------------------------------------------------------
+
+// regionMarkTermination sweeps every region block in place. It runs
+// during the stop-the-world mark termination, after the heap's sweepgen
+// has advanced, so no region is allocating and the mark bits are final.
+// Unowned blocks without live lines are returned to the heap.
+func regionMarkTermination() {
+	if debug.regioncheck != 0 {
+		regionVerify()
+	}
+	lock(&regionLock)
+	regionRecycle = nil
+	var free *mspan
+	for s := regionBlocks; s != nil; s = s.regionNext {
+		hdr := s.regionHdr()
+		regionSweepBlock(s)
+		if hdr.owner == nil && hdr.pinned == 0 {
+			s.regionRecycleNext = free
+			free = s
+		} else if hdr.owner == nil && hdr.pinned < regionLines {
+			s.regionRecycleNext = regionRecycle
+			regionRecycle = s
+		}
+	}
+	unlock(&regionLock)
+	for free != nil {
+		s := free
+		free = s.regionRecycleNext
+		s.regionRecycleNext = nil
+		regionFreeBlock(s)
+	}
+}
+
+// regionSweepBlock sweeps one region block: specials of dead objects are
+// run or freed, dead objects lose their bits, pinned lines with no live
+// object are freed, and the mark bits are reset. Active lines of an
+// owned block are left to the owner.
+func regionSweepBlock(s *mspan) {
+	hdr := s.regionHdr()
+	data := s.regionData()
+	sweepgen := mheap_.sweepgen
+	mheap_.pagesSwept.Add(int64(s.npages))
+
+	// Specials. An unmarked object with a finalizer is revived.
+	hadSpecials := s.specials != nil
+	siter := newSpecialsIter(s)
+	for siter.valid() {
+		p := s.base() + siter.s.offset
+		w := (p - data) / goarch.PtrSize
+		size := s.regionObjSize(p)
+		mbits := s.markBitsForIndex(w)
+		endOffset := siter.s.offset + size
+		if !mbits.isMarked() {
+			hasFin := false
+			for tmp := siter.s; tmp != nil && tmp.offset < endOffset; tmp = tmp.next {
+				if tmp.kind == _KindSpecialFinalizer {
+					mbits.setMarkedNonAtomic()
+					hasFin = true
+					break
+				}
+			}
+			for siter.valid() && siter.s.offset < endOffset {
+				special := siter.s
+				q := s.base() + special.offset
+				if !hasFin || special.kind == _KindSpecialFinalizer || special.kind == _KindSpecialWeakHandle {
+					siter.unlinkAndNext()
+					freeSpecial(special, unsafe.Pointer(q), size)
+				} else {
+					siter.next()
+				}
+			}
+		} else {
+			if siter.s.kind == _KindSpecialReachable {
+				special := siter.unlinkAndNext()
+				(*specialReachable)(unsafe.Pointer(special)).reachable = true
+				freeSpecial(special, unsafe.Pointer(p), size)
+			} else {
+				siter.next()
+			}
+		}
+	}
+	if hadSpecials && s.specials == nil {
+		spanHasNoSpecials(s)
+	}
+
+	// Live objects keep their lines. Dead ones lose their pointer bits,
+	// so that a later conservative mark cannot scan their stale words
+	// (which may now point to freed memory), but keep their start bit
+	// until the line is reclaimed, which keeps the size of the
+	// preceding object exact. Marking is complete and the owner is
+	// stopped, so an unmarked object in an active line is dead too; its
+	// line is still freed or pinned by the owner at exit.
+	var live [regionLines]bool
+	var nlive uintptr
+	for i := range hdr.start {
+		bits := hdr.start[i]
+		for bits != 0 {
+			w := uintptr(i)*64 + uintptr(sys.TrailingZeros64(bits))
+			bits &= bits - 1
+			l := w * goarch.PtrSize / regionLineBytes
+			if hdr.lines[l] == regionLineFree {
+				continue
+			}
+			base := data + w*goarch.PtrSize
+			size := s.regionObjSize(base)
+			if s.markBitsForIndex(w).isMarked() {
+				nlive++
+				if hdr.dbg != nil {
+					hdr.dbg[w] |= regionDbgMarked
+				}
+				for ; l <= (w*goarch.PtrSize+size-1)/regionLineBytes && l < regionLines; l++ {
+					live[l] = true
+				}
+				continue
+			}
+			hdr.clearPtrBits(w, size/goarch.PtrSize)
+			if hdr.dbg != nil {
+				hdr.dbg[w] |= regionDbgDead
+			}
+			if debug.clobberfree != 0 && hdr.lines[l] == regionLinePinned {
+				clobberfree(unsafe.Pointer(base), size)
+			}
+		}
+	}
+	// Pinned lines with no live object are freed. Every object that
+	// starts in such a line was accounted as allocated and not yet as
+	// freed; count it now.
+	var deadObjs, deadBytes uint64
+	for l := uintptr(0); l < regionLines; l++ {
+		if hdr.lines[l] == regionLinePinned && !live[l] {
+			o, _ := s.lineObjectBytes(l)
+			deadObjs += o
+			deadBytes += regionLineBytes
+			hdr.lines[l] = regionLineFree
+			hdr.pinned--
+			s.needzero = 1
+		}
+	}
+	s.allocBits = s.gcmarkBits
+	s.gcmarkBits = newMarkBits(regionDataWords)
+	atomic.Store(&s.sweepgen, sweepgen)
+	if deadObjs > 0 {
+		stats := memstats.heapStats.acquire()
+		atomic.Xadd64(&stats.largeFreeCount, int64(deadObjs))
+		atomic.Xadd64(&stats.largeFree, int64(deadBytes))
+		memstats.heapStats.release()
+		gcController.totalFree.Add(int64(deadBytes))
+	}
+	_ = nlive
+}
+
+// regionFindReferrers prints every word of a region block that points
+// into [addr, addr+size), for debugging zombie reports.
+func regionFindReferrers(addr, size uintptr) {
+	for s := regionBlocks; s != nil; s = s.regionNext {
+		hdr := s.regionHdr()
+		data := s.regionData()
+		for w := uintptr(0); w < regionDataWords; w++ {
+			v := *(*uintptr)(unsafe.Pointer(data + w*goarch.PtrSize))
+			if v < addr || v >= addr+size {
+				continue
+			}
+			l := w * goarch.PtrSize / regionLineBytes
+			base := s.regionObjBase(data + w*goarch.PtrSize)
+			print("region: referrer word=", hex(data+w*goarch.PtrSize), " -> ", hex(v), " block=", hex(s.base()), " owner=", hdr.owner, " line=", l, " state=", hdr.lines[l], " ptrbit=", hdr.ptr[w/64]>>(w%64)&1, " obj=", hex(base))
+			if base != 0 {
+				ow := (base - data) / goarch.PtrSize
+				print(" objsize=", s.regionObjSize(base), " marked=", s.markBitsForIndex(ow).isMarked(), " faded=", hdr.faded[ow/64]>>(ow%64)&1)
+			}
+			print("\n")
+		}
+	}
+}
+
+// regionVerify checks, at mark termination, that every pointer held by a
+// marked object of a region block refers to a marked heap object (or to
+// non-heap memory). A violation means the marker missed an edge, or a
+// region freed something still referenced. GODEBUG=regioncheck=1.
+func regionVerify() {
+	bad := 0
+	for s := regionBlocks; s != nil; s = s.regionNext {
+		hdr := s.regionHdr()
+		data := s.regionData()
+		for i := range hdr.start {
+			bits := hdr.start[i]
+			for bits != 0 {
+				w := uintptr(i)*64 + uintptr(sys.TrailingZeros64(bits))
+				bits &= bits - 1
+				l := w * goarch.PtrSize / regionLineBytes
+				if hdr.lines[l] == regionLineFree || !s.markBitsForIndex(w).isMarked() {
+					continue
+				}
+				if hdr.dbg != nil && hdr.dbg[w]&regionDbgBlack != 0 && hdr.dbg[w]>>20 == work.cycles.Load()&0xfff {
+					// Allocated black this cycle: marked without being
+					// reachable, so its contents prove nothing.
+					continue
+				}
+				base := data + w*goarch.PtrSize
+				size := s.regionObjSize(base)
+				for j := w; j < w+size/goarch.PtrSize; j++ {
+					if hdr.ptr[j/64]>>(j%64)&1 == 0 {
+						continue
+					}
+					q := *(*uintptr)(unsafe.Pointer(data + j*goarch.PtrSize))
+					if q == 0 {
+						continue
+					}
+					qs := spanOfHeap(q)
+					if qs == nil {
+						continue
+					}
+					var qbase uintptr
+					var marked bool
+					if qs.isRegionBlock {
+						qbase = qs.regionObjBase(q)
+						if qbase != 0 {
+							marked = qs.markBitsForIndex((qbase - qs.regionData()) / goarch.PtrSize).isMarked()
+						}
+					} else {
+						idx := qs.objIndex(q)
+						if !qs.isFreeOrNewlyAllocated(idx) || idx < uintptr(qs.freeindex) {
+							qbase = qs.base() + idx*qs.elemsize
+							marked = qs.markBitsForIndex(idx).isMarked()
+						}
+					}
+					if qbase != 0 && marked {
+						continue
+					}
+					bad++
+					print("region: verify: marked object ", hex(base), " size=", size, " block=", hex(s.base()), " owner=", hdr.owner, " line=", l, " state=", hdr.lines[l], " faded=", hdr.faded[w/64]>>(w%64)&1,
+						" word ", hex(data+j*goarch.PtrSize), " -> ", hex(q), " target span base=", hex(qs.base()), " elemsize=", qs.elemsize, " regionblock=", qs.isRegionBlock, " targetbase=", hex(qbase), " targetmarked=", marked)
+					if qs.isRegionBlock {
+						qh := qs.regionHdr()
+						ql := (q - qs.regionData()) / regionLineBytes
+						qw := (q - qs.regionData()) / goarch.PtrSize
+						print(" targetline=", ql, " state=", qh.lines[ql], " owner=", qh.owner, " targetstartbit=", qh.start[qw/64]>>(qw%64)&1)
+					}
+					if hdr.dbg != nil {
+						print(" holderdbg=", hex(hdr.dbg[w]))
+						if qs.isRegionBlock && qbase != 0 {
+							print(" targetdbg=", hex(qs.regionHdr().dbg[(qbase-qs.regionData())/goarch.PtrSize]))
+						} else if qs.isRegionBlock {
+							print(" targetdbg(word)=", hex(qs.regionHdr().dbg[(q-qs.regionData())/goarch.PtrSize]))
+						}
+						print(" cycle=", work.cycles.Load())
+					}
+					print("\n  holder words:")
+					for k := uintptr(0); k < size/goarch.PtrSize && k < 16; k++ {
+						print(" ", hex(*(*uintptr)(unsafe.Pointer(base + k*goarch.PtrSize))))
+					}
+					print("\n  target words:")
+					for k := uintptr(0); k < 8; k++ {
+						print(" ", hex(*(*uintptr)(unsafe.Pointer(q + k*goarch.PtrSize))))
+					}
+					print("\n")
+				}
+			}
+		}
+	}
+	if bad > 0 {
+		throw("region: verify failed")
+	}
+}
+
+// Debug history flags (GODEBUG=regioncheck).
+const (
+	regionDbgBlack     = 1 << 0 // allocated while the GC was marking
+	regionDbgFaded     = 1 << 1
+	regionDbgAbandoned = 1 << 2 // pinned by an abandoned region
+	regionDbgMarked    = 1 << 3 // marked at some mark termination
+	regionDbgDead      = 1 << 4 // found unmarked at a mark termination
+	regionDbgSentinel  = 1 << 5 // dummy object marking the unused tail of a run
+)
+
+// verifyExit checks, before a region frees its lines, that every live
+// region object referenced from a faded object has faded too: a
+// violation means a store into an escaped object was not checked, or the
+// transitive fade missed an edge. GODEBUG=regioncheck=1.
+func (r *regionState) verifyExit() {
+	bad := 0
+	for s := r.blocks; s != nil; s = s.regionHdr().next {
+		hdr := s.regionHdr()
+		data := s.regionData()
+		for i := range hdr.faded {
+			bits := hdr.faded[i]
+			for bits != 0 {
+				w := uintptr(i)*64 + uintptr(sys.TrailingZeros64(bits))
+				bits &= bits - 1
+				if hdr.lines[w*goarch.PtrSize/regionLineBytes] != regionLineActive {
+					continue
+				}
+				base := data + w*goarch.PtrSize
+				size := s.regionObjSize(base)
+				for j := w; j < w+size/goarch.PtrSize; j++ {
+					if hdr.ptr[j/64]>>(j%64)&1 == 0 {
+						continue
+					}
+					q := *(*uintptr)(unsafe.Pointer(data + j*goarch.PtrSize))
+					if q == 0 {
+						continue
+					}
+					qs, qbase, ok := r.isRegionObject(q)
+					if !ok {
+						continue
+					}
+					bad++
+					qh := qs.regionHdr()
+					qw := (qbase - qs.regionData()) / goarch.PtrSize
+					print("region: verifyExit: faded object ", hex(base), " size=", size, " line=", w*goarch.PtrSize/regionLineBytes, " word ", hex(data+j*goarch.PtrSize), " -> live region object ", hex(qbase), " size=", qs.regionObjSize(qbase), " block=", hex(qs.base()), " line=", qw*goarch.PtrSize/regionLineBytes)
+					if hdr.dbg != nil {
+						print(" holderdbg=", hex(hdr.dbg[w]), " targetdbg=", hex(qh.dbg[qw]))
+					}
+					print("\n  holder words:")
+					for k := uintptr(0); k < size/goarch.PtrSize && k < 16; k++ {
+						print(" ", hex(*(*uintptr)(unsafe.Pointer(base + k*goarch.PtrSize))))
+					}
+					print("\n  holder words with bits (word:start,ptr,dbg):")
+					for k := w; k < w+size/goarch.PtrSize+8 && k < regionDataWords; k++ {
+						st, pt := hdr.start[k/64]>>(k%64)&1, hdr.ptr[k/64]>>(k%64)&1
+						var d uint32
+						if hdr.dbg != nil {
+							d = hdr.dbg[k]
+						}
+						if st != 0 || pt != 0 || d != 0 {
+							print(" ", k-w, ":", st, pt, ":", hex(d))
+						}
+					}
+					print("\n  target words:")
+					for k := uintptr(0); k < 8 && k < qs.regionObjSize(qbase)/goarch.PtrSize; k++ {
+						print(" ", hex(*(*uintptr)(unsafe.Pointer(qbase + k*goarch.PtrSize))))
+					}
+					print("\n")
+				}
+			}
+		}
+	}
+	if bad > 0 {
+		throw("region: verifyExit failed")
+	}
+}
+
+// regionCheckDangling reports a stored pointer into a free line of a
+// region block: memory a region freed that the program still refers
+// to. GODEBUG=regioncheck=1.
+func regionCheckDangling(ptr, slot uintptr) {
+	s := spanOf(ptr)
+	if s == nil || !s.isRegionBlock || s.state.get() != mSpanInUse || ptr < s.regionData() {
+		return
+	}
+	hdr := s.regionHdr()
+	l := (ptr - s.regionData()) / regionLineBytes
+	if hdr.lines[l] != regionLineFree {
+		return
+	}
+	w := (ptr - s.regionData()) / goarch.PtrSize
+	print("region: store of a pointer into freed region memory: ptr=", hex(ptr), " slot=", hex(slot), " block=", hex(s.base()), " owner=", hdr.owner, " line=", l)
+	if hdr.dbg != nil {
+		print(" worddbg=", hex(hdr.dbg[w]), " cycle=", work.cycles.Load())
+	}
+	print(" pc=", hex(regionTracePC), "\n")
+	var pcs [16]uintptr
+	n := callers(2, pcs[:])
+	for i := 0; i < n; i++ {
+		f := findfunc(pcs[i])
+		if f.valid() {
+			print("  ", funcname(f), " +", hex(pcs[i]-f.entry()), "\n")
+		}
+	}
+	throw("region: dangling region pointer stored")
+}
+
+// maps_regionInheritBegin makes allocations go outside the region when
+// the map at p is not a live object of the calling goroutine's region.
+// It reports whether maps_regionInheritEnd must be called.
+//
+//go:linkname maps_regionInheritBegin
+func maps_regionInheritBegin(p unsafe.Pointer) bool {
+	gp := getg()
+	if gp.region == nil || gp.regionIgnore != 0 || regionIsLocal(gp, uintptr(p)) {
+		return false
+	}
+	gp.regionIgnore++
+	return true
+}
+
+//go:linkname maps_regionInheritEnd
+func maps_regionInheritEnd() {
+	getg().regionIgnore--
+}
+
+// regionFreeSpecials frees the specials (profile records) of the objects
+// in the active lines of s, which are about to be freed. Objects with
+// finalizers, cleanups or weak pointers fade when the special is added,
+// so their lines are pinned by then and are not active.
+func (s *mspan) regionFreeSpecials() {
+	if s.specials == nil {
+		return
+	}
+	hdr := s.regionHdr()
+	lock(&s.speciallock)
+	for pp := &s.specials; *pp != nil; {
+		sp := *pp
+		if sp.offset < regionHdrBytes {
+			throw("region: special in block header")
+		}
+		if hdr.lines[(uintptr(sp.offset)-regionHdrBytes)/regionLineBytes] != regionLineActive {
+			pp = &sp.next
+			continue
+		}
+		if sp.kind != _KindSpecialProfile {
+			throw("region: freeing an object with a non-profile special")
+		}
+		*pp = sp.next
+		p := s.base() + uintptr(sp.offset)
+		freeSpecial(sp, unsafe.Pointer(p), s.regionObjSize(p))
+	}
+	if s.specials == nil {
+		spanHasNoSpecials(s)
+	}
+	unlock(&s.speciallock)
+}
+
+// adoptGrown replaces the adopted object containing old, if any, by the
+// heap object at new (a slice's array grown outside the region).
+func (r *regionState) adoptGrown(old, new uintptr) {
+	for i := 0; i < r.nadopted; i++ {
+		if a := &r.adopted[i]; a.base <= old && old < a.base+a.size {
+			mp := acquirem()
+			if s := spanOfHeap(new); s != nil && !s.isRegionBlock {
+				// The old object is still pooled; keep it adopted and
+				// add the new one if there is room.
+				if r.nadopted < len(r.adopted) {
+					r.adopted[r.nadopted] = regionAdopted{s.objBase(new), s.elemsize}
+					r.nadopted++
+				}
+			}
+			releasem(mp)
 			return
-		}
-		for p := gp.stack.lo; p < gp.stack.hi; p += goarch.PtrSize {
-			if hit(*(*uintptr)(unsafe.Pointer(p))) {
-				print("region:   referrer stack goid=", gp.goid, " slot=", hex(p), " start=", funcname(findfunc(gp.startpc)), " status=", readgstatus(gp), "\n")
-			}
-		}
-	})
-	// Globals.
-	for _, datap := range activeModules() {
-		for p := datap.data; p < datap.edata; p += goarch.PtrSize {
-			if hit(*(*uintptr)(unsafe.Pointer(p))) {
-				print("region:   referrer data slot=", hex(p), "\n")
-			}
-		}
-		for p := datap.bss; p < datap.ebss; p += goarch.PtrSize {
-			if hit(*(*uintptr)(unsafe.Pointer(p))) {
-				print("region:   referrer bss slot=", hex(p), "\n")
-			}
 		}
 	}
 }

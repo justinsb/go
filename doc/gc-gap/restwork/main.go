@@ -253,11 +253,19 @@ func (s *server) item(id int) (*Item, error) {
 	if it := s.cache.Get(id); it != nil {
 		return it, nil
 	}
-	it, err := s.db.GetItem(id)
+	// The item is about to be cached, so it outlives the request: tell
+	// the memory region to allocate it (and everything the decoder
+	// attaches to it) on the ordinary heap instead of letting it escape
+	// at the insert. This is the "mark the allocation as escaping" step
+	// of the design; without it the item fades at Put, which is correct
+	// but pins its lines until the GC frees them.
+	var it *Item
+	var err error
+	region.Ignore(func() { it, err = s.db.GetItem(id) })
 	if err != nil {
 		return nil, err
 	}
-	s.cache.Put(id, it) // the item escapes the request here
+	s.cache.Put(id, it)
 	return it, nil
 }
 
@@ -411,8 +419,8 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	m["region/faded_objects"] = float64(st.FadedObjects)
 	m["region/faded_bytes"] = float64(st.FadedBytes)
 	m["region/abandoned"] = float64(st.Abandoned)
-	m["region/flushes"] = float64(st.Flushes)
-	m["region/span_resets"] = float64(st.SpanResets)
+	m["region/blocks"] = float64(st.Blocks)
+	m["region/barrier_calls"] = float64(st.BarrierCalls)
 	s.sampleMu.Lock()
 	m["peak/total_bytes"] = s.peakTotal
 	m["peak/heap_bytes"] = s.peakHeap
@@ -602,40 +610,41 @@ func runClient(base string) {
 
 	d := func(name string) float64 { return after[name] - before[name] }
 	res := map[string]any{
-		"label":               *label,
-		"httpregion":          after["httpregion"],
-		"ballast_mb":          after["ballast_mb"],
-		"gomaxprocs_server":   after["gomaxprocs"],
-		"requests":            *nReq,
-		"concurrency":         *conc,
-		"post_frac":           *postFrac,
-		"elapsed_s":           elapsed.Seconds(),
-		"req_per_s":           float64(*nReq) / elapsed.Seconds(),
-		"alloc_bytes":         d("/gc/heap/allocs:bytes"),
-		"alloc_bytes_per_req": d("/gc/heap/allocs:bytes") / float64(*nReq),
-		"alloc_objects":       d("/gc/heap/allocs:objects"),
-		"gc_cycles":           d("/gc/cycles/total:gc-cycles"),
-		"cpu_total_s":         d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds"),
-		"cpu_gc_s":            d("/cpu/classes/gc/total:cpu-seconds"),
-		"cpu_gc_assist_s":     d("/cpu/classes/gc/mark/assist:cpu-seconds"),
-		"gc_cpu_frac":         d("/cpu/classes/gc/total:cpu-seconds") / (d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds")),
-		"cpu_ms_per_req":      1000 * (d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds")) / float64(*nReq),
-		"proc_cpu_s":          d("rusage/cpu_s"),
-		"proc_cpu_us_per_req": 1e6 * d("rusage/cpu_s") / float64(*nReq),
-		"heap_live_bytes":     after["/gc/heap/live:bytes"],
-		"heap_goal_bytes":     after["/gc/heap/goal:bytes"],
-		"peak_heap_bytes":     after["peak/heap_bytes"],
-		"peak_total_bytes":    after["peak/total_bytes"],
-		"cache_hit_rate":      d("cache/hits") / (d("cache/hits") + d("cache/misses")),
-		"cache_entries":       after["cache/entries"],
-		"region_regions":      d("region/regions"),
-		"region_freed":        d("region/freed_regions"),
-		"region_freed_bytes":  d("region/freed_bytes"),
-		"region_freed_objs":   d("region/freed_objects"),
-		"region_faded_bytes":  d("region/faded_bytes"),
-		"region_faded_objs":   d("region/faded_objects"),
-		"region_abandoned":    d("region/abandoned"),
-		"region_flushes":      d("region/flushes"),
+		"label":                *label,
+		"httpregion":           after["httpregion"],
+		"ballast_mb":           after["ballast_mb"],
+		"gomaxprocs_server":    after["gomaxprocs"],
+		"requests":             *nReq,
+		"concurrency":          *conc,
+		"post_frac":            *postFrac,
+		"elapsed_s":            elapsed.Seconds(),
+		"req_per_s":            float64(*nReq) / elapsed.Seconds(),
+		"alloc_bytes":          d("/gc/heap/allocs:bytes"),
+		"alloc_bytes_per_req":  d("/gc/heap/allocs:bytes") / float64(*nReq),
+		"alloc_objects":        d("/gc/heap/allocs:objects"),
+		"gc_cycles":            d("/gc/cycles/total:gc-cycles"),
+		"cpu_total_s":          d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds"),
+		"cpu_gc_s":             d("/cpu/classes/gc/total:cpu-seconds"),
+		"cpu_gc_assist_s":      d("/cpu/classes/gc/mark/assist:cpu-seconds"),
+		"gc_cpu_frac":          d("/cpu/classes/gc/total:cpu-seconds") / (d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds")),
+		"cpu_ms_per_req":       1000 * (d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds")) / float64(*nReq),
+		"proc_cpu_s":           d("rusage/cpu_s"),
+		"proc_cpu_us_per_req":  1e6 * d("rusage/cpu_s") / float64(*nReq),
+		"heap_live_bytes":      after["/gc/heap/live:bytes"],
+		"heap_goal_bytes":      after["/gc/heap/goal:bytes"],
+		"peak_heap_bytes":      after["peak/heap_bytes"],
+		"peak_total_bytes":     after["peak/total_bytes"],
+		"cache_hit_rate":       d("cache/hits") / (d("cache/hits") + d("cache/misses")),
+		"cache_entries":        after["cache/entries"],
+		"region_regions":       d("region/regions"),
+		"region_freed":         d("region/freed_regions"),
+		"region_freed_bytes":   d("region/freed_bytes"),
+		"region_freed_objs":    d("region/freed_objects"),
+		"region_faded_bytes":   d("region/faded_bytes"),
+		"region_faded_objs":    d("region/faded_objects"),
+		"region_abandoned":     d("region/abandoned"),
+		"region_blocks":        d("region/blocks"),
+		"region_barrier_calls": d("region/barrier_calls"),
 	}
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)

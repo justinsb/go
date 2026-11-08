@@ -483,7 +483,8 @@ type g struct {
 	// region is non-nil while the goroutine is inside region.Do.
 	// Its offset is abi.GRegionOffset; the compiler loads it in the
 	// write barrier sequence. See region.go.
-	region *regionState
+	region       *regionState
+	regionIgnore uintptr // depth of region.Ignore; allocations go to the heap
 
 	_panic    *_panic // innermost panic
 	_defer    *_defer // innermost defer

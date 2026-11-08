@@ -88,8 +88,8 @@ func AddCleanup[T, S any](ptr *T, cleanup func(S), arg S) Cleanup {
 		// anything it references must not be freed with the region,
 		// and the records created below must live outside it.
 		regionFadePtr(gp, uintptr(*(*unsafe.Pointer)(unsafe.Pointer(&cleanup))))
-		gp.region.ignore++
-		defer func() { gp.region.ignore-- }()
+		gp.regionIgnore++
+		defer func() { gp.regionIgnore-- }()
 	}
 
 	// The pointer to the object must be valid.

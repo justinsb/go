@@ -1206,6 +1206,9 @@ func (it *Iter) Next() {
 // entries. Since the table is replaced, t is now stale and should not be
 // modified.
 func (t *table) rehash(typ *abi.MapType, m *Map) {
+	if regionInheritBegin(unsafe.Pointer(m)) {
+		defer regionInheritEnd()
+	}
 	// TODO(prattmic): SwissTables typically perform a "rehash in place"
 	// operation which recovers capacity consumed by tombstones without growing
 	// the table by reordering slots as necessary to maintain the probe

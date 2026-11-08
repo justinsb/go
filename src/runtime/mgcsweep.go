@@ -522,6 +522,11 @@ func (sl *sweepLocked) sweep(preserve bool) bool {
 		print("mspan.sweep: state=", state, " sweepgen=", s.sweepgen, " mheap.sweepgen=", sweepgen, "\n")
 		throw("mspan.sweep: bad span state")
 	}
+	if s.isRegionBlock {
+		// Region blocks are swept in place at mark termination and
+		// never reach the sweeper. See regionMarkTermination.
+		throw("mspan.sweep: region block")
+	}
 
 	trace := traceAcquire()
 	if trace.ok() {
@@ -858,6 +863,7 @@ func (sl *sweepLocked) sweep(preserve bool) bool {
 // pointer to that object and marked it.
 func (s *mspan) reportZombies() {
 	printlock()
+	regionFindReferrers(s.base(), s.npages*pageSize)
 	print("runtime: marked free object in span ", s, ", elemsize=", s.elemsize, " freeindex=", s.freeindex, " (bad use of unsafe.Pointer or having race conditions? try -d=checkptr or -race)\n")
 	mbits := s.markBitsForBase()
 	abits := s.allocBitsForIndex(0)

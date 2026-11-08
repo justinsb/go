@@ -79,7 +79,7 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		mp = acquirem()
 
 		// Do we need to fall back to slow path?
-		forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0)
+		forceSlowPath := debug.malloc || gcBlackenEnabled != 0 || (goexperiment.RuntimeSecret && getg().secret > 0) || getg().region != nil
 
 		if forceSlowPath {
 			releasem(mp) // Slow path will reacquire.
@@ -119,6 +119,12 @@ func mallocStub(size uintptr, typ *_type, needzero bool) unsafe.Pointer {
 		// Pre-malloc debug hooks.
 		if debug.malloc {
 			if x := preMallocgcDebug(size, typ); x != nil {
+				return x
+			}
+		}
+		// Memory regions (region.go).
+		if gp := getg(); gp.region != nil {
+			if x := regionAlloc(gp, size, typ, needzero); x != nil {
 				return x
 			}
 		}

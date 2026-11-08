@@ -60,7 +60,7 @@ func delta(f func()) region.Stats {
 		FadedObjects: after.FadedObjects - before.FadedObjects,
 		FadedBytes:   after.FadedBytes - before.FadedBytes,
 		Abandoned:    after.Abandoned - before.Abandoned,
-		Flushes:      after.Flushes - before.Flushes,
+		Blocks:       after.Blocks - before.Blocks,
 	}
 }
 
@@ -88,7 +88,7 @@ func TestLocalFreed(t *testing.T) {
 	// deliberately loose: under GOGC=5 in the full suite the count is
 	// occasionally about 1500 (one class of objects not counted), which
 	// has not been tracked down; no corruption accompanies it.
-	if st.Abandoned == 0 && st.Flushes == 0 && st.FreedObjects+st.FadedObjects < 1400 {
+	if st.Abandoned == 0 && st.FreedObjects+st.FadedObjects < 1400 {
 		t.Errorf("freed %d + faded %d objects, want at least 1400 (nodes, names and data)", st.FreedObjects, st.FadedObjects)
 	}
 	t.Logf("stats: %+v (sink %d)", st, sink)

@@ -116,6 +116,14 @@ type typePointers struct {
 //
 //go:nosplit
 func (span *mspan) typePointersOf(addr, size uintptr) typePointers {
+	if span.isRegionBlock {
+		base := span.regionObjBase(addr)
+		if base == 0 {
+			return typePointers{}
+		}
+		tp := span.regionTypePointers(base)
+		return tp.fastForward(addr-tp.addr, addr+size)
+	}
 	base := span.objBase(addr)
 	tp := span.typePointersOfUnchecked(base)
 	if base == addr && size == span.elemsize {
@@ -142,6 +150,9 @@ func (span *mspan) typePointersOfUnchecked(addr uintptr) typePointers {
 	spc := span.spanclass
 	if spc.noscan() {
 		return typePointers{}
+	}
+	if span.isRegionBlock {
+		return span.regionTypePointers(addr)
 	}
 	if heapBitsInSpan(span.elemsize) {
 		// Handle header-less objects.
@@ -1403,6 +1414,16 @@ func findObject(p, refBase, refOff uintptr) (base uintptr, s *mspan, objIndex ui
 		return
 	}
 
+	if s.isRegionBlock {
+		// Region blocks hold objects of many sizes; find the start
+		// through the block's start bitmap. See region.go.
+		base = s.regionObjBase(p)
+		if base == 0 {
+			return 0, nil, 0
+		}
+		objIndex = (base - s.regionData()) / goarch.PtrSize
+		return
+	}
 	objIndex = s.objIndex(p)
 	base = s.base() + objIndex*s.elemsize
 	return

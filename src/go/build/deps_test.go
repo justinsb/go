@@ -159,7 +159,9 @@ var depsRules = `
 	# TIME is SYSCALL plus the core packages about time, including context.
 	SYSCALL
 	< time/tzdata
-	< time
+	< time;
+
+	time, region
 	< context
 	< TIME;
 

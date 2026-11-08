@@ -62,7 +62,7 @@ func makeslicecopy(et *_type, tolen int, fromlen int, from unsafe.Pointer) unsaf
 	} else {
 		// Note: can't use rawmem (which avoids zeroing of memory), because then GC can scan uninitialized memory.
 		to = mallocgc(tomem, et, true)
-		if copymem > 0 && writeBarrier.enabled {
+		if copymem > 0 && (writeBarrier.enabled || getg().region != nil) {
 			// Only shade the pointers in old.array since we know the destination slice to
 			// only contains nil pointers because it has been cleared during alloc.
 			//
@@ -176,6 +176,18 @@ func makeslice64(et *_type, len64, cap64 int64) unsafe.Pointer {
 //
 //go:linkname growslice
 func growslice(oldPtr unsafe.Pointer, newLen, oldCap, num int, et *_type) slice {
+	// Memory regions: a slice whose array lives outside the region
+	// (or escaped it) grows outside the region too, so that the new
+	// array does not escape as soon as the slice header is stored.
+	if gp := getg(); gp.region != nil && gp.regionIgnore == 0 && oldPtr != nil && !regionIsLocal(gp, uintptr(oldPtr)) {
+		gp.regionIgnore++
+		s := growslice(oldPtr, newLen, oldCap, num, et)
+		gp.regionIgnore--
+		// An array grown from one the region adopted (a pooled
+		// object's buffer) is adopted in its place.
+		gp.region.adoptGrown(uintptr(oldPtr), uintptr(s.array))
+		return s
+	}
 	oldLen := newLen - num
 	if raceenabled {
 		callerpc := sys.GetCallerPC()
@@ -271,7 +283,7 @@ func growslice(oldPtr unsafe.Pointer, newLen, oldCap, num int, et *_type) slice 
 	} else {
 		// Note: can't use rawmem (which avoids zeroing of memory), because then GC can scan uninitialized memory.
 		p = mallocgc(capmem, et, true)
-		if lenmem > 0 && writeBarrier.enabled {
+		if lenmem > 0 && (writeBarrier.enabled || getg().region != nil) {
 			// Only shade the pointers in oldPtr since we know the destination slice p
 			// only contains nil pointers because it has been cleared during alloc.
 			//

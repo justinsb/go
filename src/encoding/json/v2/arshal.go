@@ -12,8 +12,10 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"region"
 	"sync"
 	"time"
+	"unsafe"
 
 	"encoding/json/internal"
 	"encoding/json/internal/jsonflags"
@@ -387,7 +389,7 @@ func Unmarshal(in []byte, out any, opts ...Options) (err error) {
 	dec := export.GetBufferedDecoder(in, opts...)
 	defer export.PutBufferedDecoder(dec)
 	xd := export.Decoder(dec)
-	err = unmarshalDecode(dec, out, &xd.Struct, true)
+	region.Inherit(targetPointer(out), func() { err = unmarshalDecode(dec, out, &xd.Struct, true) })
 	if err != nil && xd.Flags.Get(jsonflags.ReportErrorsWithLegacySemantics) {
 		return internal.TransformUnmarshalError(out, err)
 	}
@@ -404,7 +406,7 @@ func UnmarshalRead(in io.Reader, out any, opts ...Options) (err error) {
 	dec := export.GetStreamingDecoder(in, opts...)
 	defer export.PutStreamingDecoder(dec)
 	xd := export.Decoder(dec)
-	err = unmarshalDecode(dec, out, &xd.Struct, true)
+	region.Inherit(targetPointer(out), func() { err = unmarshalDecode(dec, out, &xd.Struct, true) })
 	if err != nil && xd.Flags.Get(jsonflags.ReportErrorsWithLegacySemantics) {
 		return internal.TransformUnmarshalError(out, err)
 	}
@@ -436,7 +438,7 @@ func UnmarshalDecode(in *jsontext.Decoder, out any, opts ...Options) (err error)
 			}
 		}
 	}
-	err = unmarshalDecode(in, out, &xd.Struct, false)
+	region.Inherit(targetPointer(out), func() { err = unmarshalDecode(in, out, &xd.Struct, false) })
 	if err != nil && xd.Flags.Get(jsonflags.ReportErrorsWithLegacySemantics) {
 		return internal.TransformUnmarshalError(out, err)
 	}
@@ -559,4 +561,11 @@ func putStrings(s *stringSlice) {
 	}
 	clear(*s) // avoid pinning a reference to each string
 	stringsPools.Put(s)
+}
+
+// targetPointer returns the pointer held by the interface value out, so
+// that what the decoder attaches to the target is allocated where the
+// target lives (see region.Inherit).
+func targetPointer(out any) unsafe.Pointer {
+	return (*[2]unsafe.Pointer)(unsafe.Pointer(&out))[1]
 }

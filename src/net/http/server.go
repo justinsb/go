@@ -739,7 +739,8 @@ func (cr *connReader) startBackgroundRead() {
 	}
 	cr.inRead = true
 	cr.rwc.SetReadDeadline(time.Time{})
-	go cr.backgroundRead()
+	// The goroutine's closure outlives the request's memory region.
+	region.Ignore(func() { go cr.backgroundRead() })
 }
 
 func (cr *connReader) backgroundRead() {
@@ -1063,7 +1064,7 @@ func (c *conn) readRequest(ctx context.Context) (w *response, err error) {
 		return nil, statusError{StatusHTTPVersionNotSupported, "unsupported protocol version"}
 	}
 
-	c.lastMethod = req.Method
+	c.lastMethod = canonicalMethod(req.Method)
 	c.r.setInfiniteReadLimit()
 
 	hosts, haveHost := req.Header["Host"]
@@ -2355,6 +2356,34 @@ func (w *response) CloseNotify() <-chan bool {
 		panic("net/http: CloseNotify called after ServeHTTP finished")
 	}
 	return w.cn.channel()
+}
+
+// canonicalMethod returns m as a constant string when it is a standard
+// method, so that the connection does not retain a string allocated for
+// the request (and, in a memory region, make it escape).
+func canonicalMethod(m string) string {
+	switch m {
+	case MethodGet:
+		return MethodGet
+	case MethodPost:
+		return MethodPost
+	case MethodHead:
+		return MethodHead
+	case MethodPut:
+		return MethodPut
+	case MethodDelete:
+		return MethodDelete
+	case MethodOptions:
+		return MethodOptions
+	case MethodPatch:
+		return MethodPatch
+	case MethodConnect:
+		return MethodConnect
+	case MethodTrace:
+		return MethodTrace
+	}
+	region.Ignore(func() { m = strings.Clone(m) })
+	return m
 }
 
 // closeNotifier is the per-request CloseNotify state. The background

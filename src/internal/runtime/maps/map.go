@@ -626,6 +626,9 @@ func (m *Map) growToSmall(typ *abi.MapType) {
 }
 
 func (m *Map) growToTable(typ *abi.MapType) *table {
+	if regionInheritBegin(unsafe.Pointer(m)) {
+		defer regionInheritEnd()
+	}
 	tab := newTable(typ, 2*abi.MapGroupSlots, 0, 0)
 
 	g := groupReference{

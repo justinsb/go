@@ -37,6 +37,16 @@ func newarray(typ *abi.Type, n int) unsafe.Pointer
 //go:linkname newobject
 func newobject(typ *abi.Type) unsafe.Pointer
 
+// Memory regions (runtime/region.go): a map that lives outside the
+// calling goroutine's region grows outside it too. regionInheritBegin
+// reports whether regionInheritEnd must be called.
+//
+//go:linkname regionInheritBegin runtime.maps_regionInheritBegin
+func regionInheritBegin(p unsafe.Pointer) bool
+
+//go:linkname regionInheritEnd runtime.maps_regionInheritEnd
+func regionInheritEnd()
+
 // Pushed from runtime in order to use runtime.plainError
 //
 //go:linkname errNilAssign

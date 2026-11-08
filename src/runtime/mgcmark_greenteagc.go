@@ -1198,6 +1198,9 @@ func scanObject(b uintptr, gcw *gcWork) {
 	// oblet, in which case we compute the size to scan below.
 	s := spanOfUnchecked(b)
 	n := s.elemsize
+	if s.isRegionBlock {
+		n = s.regionObjSize(b)
+	}
 	if n == 0 {
 		throw("scanObject n == 0")
 	}

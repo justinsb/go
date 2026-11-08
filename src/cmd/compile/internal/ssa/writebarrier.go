@@ -578,6 +578,13 @@ func writebarrier(f *Func) {
 		//
 		// bEnd ends with the region test; bRegion holds the calls; bAfter
 		// takes over bEnd's role as the continuation of the block.
+		//
+		// Stores into an object this function just allocated and has
+		// not yet published (regionFreshDst) need no check: the object
+		// is a live region object whenever the goroutine is in a region
+		// and allocating in it. They are checked only when allocations
+		// are being placed outside the region (g.regionIgnore != 0), in
+		// a further block bIgnore.
 		bRegion := f.NewBlock(BlockPlain)
 		bAfter := f.NewBlock(bEnd.Kind)
 		bRegion.Pos = pos
@@ -589,8 +596,8 @@ func writebarrier(f *Func) {
 			e.b.Preds[e.i].b = bAfter
 		}
 		bEnd.ResetControls()
+		g := bEnd.NewValue1(pos, OpGetG, cfgtypes.BytePtr, wbend)
 		{
-			g := bEnd.NewValue1(pos, OpGetG, cfgtypes.BytePtr, wbend)
 			raddr := bEnd.NewValue1I(pos, OpOffPtr, cfgtypes.BytePtrPtr, abi.GRegionOffset, g)
 			rval := bEnd.NewValue2(pos, OpLoad, cfgtypes.BytePtr, raddr, wbend)
 			rflag := bEnd.NewValue1(pos, OpIsNonNil, cfgtypes.Bool, rval)
@@ -603,37 +610,70 @@ func writebarrier(f *Func) {
 			bEnd.Succs = bEnd.Succs[:0]
 			bEnd.AddEdgeTo(bRegion)
 			bEnd.AddEdgeTo(bAfter)
-			bRegion.AddEdgeTo(bAfter)
 		}
-		memRegion := wbend
-		for _, w := range stores {
+		regionCheck := func(w *Value, blk *Block, mem *Value) *Value {
 			dst := w.Args[0]
 			if dst == nilcheck {
 				dst = nilcheckEnd
 			}
 			switch w.Op {
 			case OpStoreWB:
-				val := w.Args[1]
-				if !needWBsrc(val) {
-					continue
-				}
-				memRegion = wbcall(w.Pos, bRegion, wbRegion, sp, memRegion, dst, val)
+				return wbcall(w.Pos, blk, wbRegion, sp, mem, dst, w.Args[1])
 			case OpMoveWB:
 				// The data has been moved; let the runtime read the
 				// pointers from the destination.
 				typ := reflectdata.TypeLinksym(w.Aux.(*types.Type))
 				taddr := b.NewValue1A(pos, OpAddr, cfgtypes.Uintptr, typ, sb)
-				memRegion = wbcall(w.Pos, bRegion, wbRegionMove, sp, memRegion, taddr, dst, dst)
+				return wbcall(w.Pos, blk, wbRegionMove, sp, mem, taddr, dst, dst)
 			}
+			return mem
 		}
-		// last becomes the merge of the two paths, so that everything
-		// that used the last store's memory now uses the merged memory.
-		bAfter.Values = append(bAfter.Values, last)
-		last.Block = bAfter
-		last.reset(OpPhi)
-		last.Pos = last.Pos.WithNotStmt()
-		last.Type = types.TypeMem
-		last.AddArgs(wbend, memRegion)
+		memRegion := wbend
+		var fresh []*Value
+		for _, w := range stores {
+			if w.Op == OpStoreWB && !needWBsrc(w.Args[1]) {
+				continue
+			}
+			if regionFreshDst(w, select1) {
+				fresh = append(fresh, w)
+				continue
+			}
+			memRegion = regionCheck(w, bRegion, memRegion)
+		}
+		if len(fresh) == 0 {
+			bRegion.AddEdgeTo(bAfter)
+			// last becomes the merge of the two paths, so that
+			// everything that used the last store's memory now uses
+			// the merged memory.
+			bAfter.Values = append(bAfter.Values, last)
+			last.Block = bAfter
+			last.reset(OpPhi)
+			last.Pos = last.Pos.WithNotStmt()
+			last.Type = types.TypeMem
+			last.AddArgs(wbend, memRegion)
+		} else {
+			bIgnore := f.NewBlock(BlockPlain)
+			bIgnore.Pos = pos
+			iaddr := bRegion.NewValue1I(pos, OpOffPtr, cfgtypes.BytePtrPtr, abi.GRegionIgnoreOffset, g)
+			ival := bRegion.NewValue2(pos, OpLoad, cfgtypes.BytePtr, iaddr, memRegion)
+			iflag := bRegion.NewValue1(pos, OpIsNonNil, cfgtypes.Bool, ival)
+			bRegion.Kind = BlockIf
+			bRegion.SetControl(iflag)
+			bRegion.Likely = BranchUnlikely
+			bRegion.AddEdgeTo(bIgnore)
+			bRegion.AddEdgeTo(bAfter)
+			memIgnore := memRegion
+			for _, w := range fresh {
+				memIgnore = regionCheck(w, bIgnore, memIgnore)
+			}
+			bIgnore.AddEdgeTo(bAfter)
+			bAfter.Values = append(bAfter.Values, last)
+			last.Block = bAfter
+			last.reset(OpPhi)
+			last.Pos = last.Pos.WithNotStmt()
+			last.Type = types.TypeMem
+			last.AddArgs(wbend, memRegion, memIgnore)
+		}
 
 		// Free all the old stores, except last which became the merge.
 		for _, w := range stores {
@@ -923,4 +963,55 @@ func isVolatile(v *Value) bool {
 		v = v.Args[0]
 	}
 	return v.Op == OpSP
+}
+
+// regionMaxObjectBytes is the largest allocation a memory region serves;
+// it must match runtime.regionMaxObject.
+const regionMaxObjectBytes = 16 << 10
+
+// regionFreshDst reports whether the destination of store w is an object
+// that this function allocated (newobject or a specialized malloc) and
+// that has not been published since: no call has run and no pointer to
+// it has been stored to memory between the allocation and w. Such an
+// object is a live, unfaded object of the goroutine's region whenever
+// the goroutine is in a region and allocating in it, so a store into it
+// needs no region check (see runtime.wbRegion).
+func regionFreshDst(w *Value, select1 []*Value) bool {
+	obj := w.Args[0]
+	for obj.Op == OpOffPtr || obj.Op == OpCopy || obj.Op == OpAddPtr || obj.Op == OpPtrIndex {
+		obj = obj.Args[0]
+	}
+	allocMem, ok := IsNewObject(obj, select1)
+	if !ok {
+		return false
+	}
+	t := obj.Type
+	if !t.IsPtr() || t.Elem().Size() == 0 || t.Elem().Size() > regionMaxObjectBytes {
+		return false
+	}
+	for m := w.MemoryArg(); m != allocMem; {
+		switch m.Op {
+		case OpStore, OpStoreWB:
+			if !regionDerived(m.Args[0], obj) && regionDerived(m.Args[1], obj) {
+				return false // a pointer to obj is stored elsewhere
+			}
+		case OpMove, OpMoveWB:
+			if !regionDerived(m.Args[0], obj) {
+				return false // the copied memory might hold a pointer to obj
+			}
+		case OpZero, OpZeroWB, OpVarDef, OpVarLive:
+		default:
+			return false // a call, a phi, or an earlier barrier batch
+		}
+		m = m.MemoryArg()
+	}
+	return true
+}
+
+// regionDerived reports whether v is obj or an address derived from it.
+func regionDerived(v, obj *Value) bool {
+	for v.Op == OpOffPtr || v.Op == OpCopy || v.Op == OpAddPtr || v.Op == OpPtrIndex || v.Op == OpConvert {
+		v = v.Args[0]
+	}
+	return v == obj
 }

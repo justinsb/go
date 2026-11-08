@@ -60,9 +60,11 @@ package context
 import (
 	"errors"
 	"internal/reflectlite"
+	"region"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 )
 
 // A Context carries a deadline, a cancellation signal, and other values across
@@ -275,9 +277,20 @@ func withCancel(parent Context) *cancelCtx {
 	if parent == nil {
 		panic("cannot create context from nil parent")
 	}
-	c := &cancelCtx{}
-	c.propagateCancel(parent, c)
+	var c *cancelCtx
+	// A child context is registered with its parent, so it lives where
+	// the parent lives (see package region).
+	region.Inherit(contextData(parent), func() {
+		c = &cancelCtx{}
+		c.propagateCancel(parent, c)
+	})
 	return c
+}
+
+// contextData returns the data word of the interface value parent: the
+// pointer to the parent's object, for region.Inherit.
+func contextData(parent Context) unsafe.Pointer {
+	return (*[2]unsafe.Pointer)(unsafe.Pointer(&parent))[1]
 }
 
 // Cause returns a non-nil error explaining why c was canceled.
@@ -638,23 +651,31 @@ func WithDeadlineCause(parent Context, d time.Time, cause error) (Context, Cance
 		// The current deadline is already sooner than the new one.
 		return WithCancel(parent)
 	}
-	c := &timerCtx{
-		deadline: d,
-	}
-	c.cancelCtx.propagateCancel(parent, c)
-	dur := time.Until(d)
-	if dur <= 0 {
-		c.cancel(true, DeadlineExceeded, cause) // deadline has already passed
-		return c, func() { c.cancel(false, Canceled, nil) }
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.err.Load() == nil {
-		c.timer = time.AfterFunc(dur, func() {
-			c.cancel(true, DeadlineExceeded, cause)
-		})
-	}
-	return c, func() { c.cancel(true, Canceled, nil) }
+	var c *timerCtx
+	var cancel CancelFunc
+	// The child is registered with its parent and with a timer, so it
+	// lives where the parent lives (see package region).
+	region.Inherit(contextData(parent), func() {
+		c = &timerCtx{
+			deadline: d,
+		}
+		c.cancelCtx.propagateCancel(parent, c)
+		dur := time.Until(d)
+		if dur <= 0 {
+			c.cancel(true, DeadlineExceeded, cause) // deadline has already passed
+			cancel = func() { c.cancel(false, Canceled, nil) }
+			return
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.err.Load() == nil {
+			c.timer = time.AfterFunc(dur, func() {
+				c.cancel(true, DeadlineExceeded, cause)
+			})
+		}
+		cancel = func() { c.cancel(true, Canceled, nil) }
+	})
+	return c, cancel
 }
 
 // A timerCtx carries a timer and a deadline. It embeds a cancelCtx to

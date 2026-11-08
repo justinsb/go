@@ -1,0 +1,12 @@
+fade profile, 300k requests, GODEBUG=httpregion=1,regiontrace=1
+total fades 115295 bytes 1638688 (0.384 fades, 5.5 bytes per request)
+  11.9% bytes   194704 fades   23328  runtime.mapassign_faststr  runtime_faststr.go:387
+  11.9% bytes   194624 fades   13855  net/http.Header.sortedKeyValues  sort.go:32
+   8.1% bytes   133408 fades   11314  encoding/json/jsontext.(*encoderState).WriteToken  encode.go:154
+   7.1% bytes   116560 fades    8919  internal/runtime/maps.(*Iter).Next  table.go:934
+   6.7% bytes   110008 fades     492  main.(*Cache).Put  main.go:235
+   6.3% bytes   103720 fades    9367  encoding/json/v2.makeStructArshaler.func2  arshal_default.go:1214
+   4.4% bytes    72512 fades      46  sync/atomic.StorePointer  atomic_pointer.go:109
+   3.4% bytes    55928 fades    2097  runtime.gopark  proc.go:468
+   3.3% bytes    53536 fades    2857  net/http.(*routingNode).matchPath  routing_tree.go:184
+   2.9% bytes    47800 fades    4227  encoding/json/v2.makeStringArshaler.func1  arshal_default.go:234
