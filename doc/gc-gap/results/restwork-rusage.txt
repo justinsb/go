@@ -1,0 +1,4 @@
+off-1 server_cpu_s=10.390 us_per_req=34.633 req_per_s=52027
+on-1 server_cpu_s=15.080 us_per_req=50.266 req_per_s=43026
+off-2 server_cpu_s=10.600 us_per_req=35.333 req_per_s=50973
+on-2 server_cpu_s=14.990 us_per_req=49.966 req_per_s=43111

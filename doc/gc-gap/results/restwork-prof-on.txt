@@ -1,0 +1,69 @@
+File: restwork-ours
+Build ID: 2b19c12f0843d7e901c8f5533a5b0d7a12bf7faf
+Type: cpu
+Time: 2026-11-08 20:29:49 UTC
+Duration: 8.77s, Total samples = 15.05s (171.66%)
+Showing nodes accounting for 10.19s, 67.71% of 15.05s total
+Dropped 415 nodes (cum <= 0.08s)
+Showing top 60 nodes out of 209
+      flat  flat%   sum%        cum   cum%
+     2.20s 14.62% 14.62%      2.20s 14.62%  internal/runtime/syscall/linux.Syscall6
+     1.65s 10.96% 25.58%      2.29s 15.22%  runtime.(*regionState).resetSpan
+     0.57s  3.79% 29.37%      1.15s  7.64%  runtime.(*regionState).isRegionObject
+     0.44s  2.92% 32.29%      0.44s  2.92%  internal/runtime/atomic.(*Uint32).Add (inline)
+     0.33s  2.19% 34.49%      0.33s  2.19%  runtime.memclrNoHeapPointers
+     0.32s  2.13% 36.61%      2.62s 17.41%  runtime.(*regionState).freeAll
+     0.25s  1.66% 38.27%      1.30s  8.64%  runtime.regionCheckStore
+     0.25s  1.66% 39.93%      1.52s 10.10%  runtime.wbRegion
+     0.21s  1.40% 41.33%      0.29s  1.93%  runtime.spanOf (inline)
+     0.19s  1.26% 42.59%      0.19s  1.26%  runtime.memmove
+     0.18s  1.20% 43.79%      0.18s  1.20%  time.runtimeNow
+     0.17s  1.13% 44.92%      0.34s  2.26%  internal/runtime/maps.(*Iter).Next
+     0.16s  1.06% 45.98%      0.37s  2.46%  encoding/json/internal/jsonwire.AppendQuote
+     0.16s  1.06% 47.04%      0.16s  1.06%  runtime.futex
+     0.14s  0.93% 47.97%      0.23s  1.53%  runtime.(*mspan).objIndex (inline)
+     0.14s  0.93% 48.90%      0.14s  0.93%  runtime.(*mspan).writeHeapBitsSmall
+     0.13s  0.86% 49.77%      2.38s 15.81%  encoding/json/v2.makeStructArshaler.func2
+     0.13s  0.86% 50.63%      0.13s  0.86%  internal/runtime/maps.memHashAES
+     0.13s  0.86% 51.50%      0.13s  0.86%  runtime.regionBitsWords (inline)
+     0.11s  0.73% 52.23%      0.16s  1.06%  runtime.mallocgcSmallScanNoHeaderSC2
+     0.11s  0.73% 52.96%      0.11s  0.73%  runtime.nextFreeFast (inline)
+     0.10s  0.66% 53.62%      0.10s  0.66%  internal/runtime/maps.ctrlGroup.matchH2 (inline)
+     0.10s  0.66% 54.29%      2.23s 14.82%  main.(*server).handleOrder
+     0.10s  0.66% 54.95%      0.17s  1.13%  runtime.mallocgcSmallScanNoHeaderSC7
+     0.09s   0.6% 55.55%      0.09s   0.6%  indexbytebody
+     0.09s   0.6% 56.15%      0.11s  0.73%  runtime.(*consistentHeapStats).read
+     0.09s   0.6% 56.74%      0.09s   0.6%  runtime.(*mspan).divideByElemSize (inline)
+     0.09s   0.6% 57.34%      0.09s   0.6%  runtime.casgstatus
+     0.09s   0.6% 57.94%         1s  6.64%  runtime.mallocgc
+     0.08s  0.53% 58.47%      0.14s  0.93%  reflect.Value.Field
+     0.08s  0.53% 59.00%      0.08s  0.53%  runtime.arenaIndex (inline)
+     0.07s  0.47% 59.47%      0.13s  0.86%  runtime.(*gcBits).bitp (inline)
+     0.07s  0.47% 59.93%      0.08s  0.53%  runtime.mallocgcSmallScanNoHeaderSC3
+     0.07s  0.47% 60.40%      0.10s  0.66%  runtime.mallocgcTinySC2
+     0.07s  0.47% 60.86%      0.34s  2.26%  runtime.regionBulkCheck
+     0.06s   0.4% 61.26%      0.81s  5.38%  encoding/json/v2.makeMapArshaler.func2
+     0.06s   0.4% 61.66%      0.08s  0.53%  net/http.(*conn).hijacked
+     0.06s   0.4% 62.06%      0.19s  1.26%  runtime.(*regionState).scanOuterStack
+     0.06s   0.4% 62.46%      0.20s  1.33%  runtime.mapaccess2_faststr
+     0.06s   0.4% 62.86%      2.87s 19.07%  runtime.regionEnd
+     0.05s  0.33% 63.19%      0.15s     1%  main.(*Cache).Get
+     0.05s  0.33% 63.52%      0.42s  2.79%  runtime.growslice
+     0.04s  0.27% 63.79%      0.34s  2.26%  encoding/json/jsontext.(*decoderState).ReadValue
+     0.04s  0.27% 64.05%      0.36s  2.39%  encoding/json/v2.makeStructArshaler.func3
+     0.04s  0.27% 64.32%      0.12s   0.8%  internal/strconv.ftoa64
+     0.04s  0.27% 64.58%      2.50s 16.61%  main.(*server).handleItem
+     0.04s  0.27% 64.85%      0.53s  3.52%  net/textproto.readMIMEHeader
+     0.04s  0.27% 65.12%      0.18s  1.20%  net/url.parse
+     0.04s  0.27% 65.38%      0.23s  1.53%  runtime.netpoll
+     0.04s  0.27% 65.65%      0.20s  1.33%  runtime.wakep
+     0.04s  0.27% 65.91%      0.18s  1.20%  slices.Grow[go.shape.[]uint8,go.shape.uint8] (inline)
+     0.03s   0.2% 66.11%      0.25s  1.66%  encoding/json/jsontext.(*decoderState).consumeValue
+     0.03s   0.2% 66.31%      0.41s  2.72%  encoding/json/jsontext.(*encoderState).WriteToken
+     0.03s   0.2% 66.51%      0.11s  0.73%  encoding/json/jsontext.(*stateMachine).pushArray (inline)
+     0.03s   0.2% 66.71%      0.09s   0.6%  internal/poll.runtime_pollSetDeadline
+     0.03s   0.2% 66.91%      0.11s  0.73%  internal/runtime/maps.(*Iter).Init
+     0.03s   0.2% 67.11%      0.72s  4.78%  net/http.(*chunkWriter).writeHeader
+     0.03s   0.2% 67.31%      2.10s 13.95%  net/http.(*conn).readRequest
+     0.03s   0.2% 67.51%     13.90s 92.36%  net/http.(*conn).serve
+     0.03s   0.2% 67.71%      0.29s  1.93%  net/http.Header.writeSubset

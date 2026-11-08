@@ -162,21 +162,28 @@ two small per-request items above.
 `GET /items/{id}` (Zipf-distributed, 93% cache hit rate) and 30%
 `POST /orders`; 20k items, cache of 5000; server at GOMAXPROCS=4 and the
 client in a separate process at GOMAXPROCS=2 on the same 4-core machine.
-Means of two runs each; "base" is the unmodified request path (regions
+Means of two runs each (server CPU measured as described below); "base" is the unmodified request path (regions
 off), "region" is `GODEBUG=httpregion=1`. The ballast rows add 256 MiB of
 pointer-rich long-lived data to the server. (`results/restwork.jsonl`,
 `results/restwork-summary.csv`, `restwork/summarize.py`.)
 
-| config | req/s | CPU ms/req | GC CPU % | GC cycles | alloc KB/req | live MiB | peak heap MiB | freed % | faded % | abandoned % |
+| config | req/s | CPU us/req | GC CPU % | GC cycles | alloc KB/req | live MiB | peak heap MiB | freed % | faded % | abandoned % |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| base, GOGC=100 | 46870 | 0.064 | 2.5 | 40 | 3.5 | 40.5 | 86.6 | | | |
-| region, GOGC=100 | 43853 | 0.061 | 0.5 | 8 | 11.5 | 43.4 | 79.7 | 97.4 | 2.6 | 0.3 |
-| base, GOGC=50 | 48292 | 0.063 | 4.5 | 84 | 3.5 | 40.1 | 65.2 | | | |
-| region, GOGC=50 | 41945 | 0.071 | 0.7 | 12 | 11.5 | 45.2 | 64.7 | 97.4 | 2.6 | 0.5 |
-| base, GOGC=25 | 44107 | 0.071 | 8.8 | 186 | 3.5 | 40.5 | 54.4 | | | |
-| region, GOGC=25 | 41289 | 0.079 | 1.3 | 22 | 11.5 | 43.7 | 56.1 | 97.4 | 2.6 | 1.2 |
-| base, GOGC=100, 256 MiB ballast | 47837 | 0.058 | 9.6 | 7 | 3.5 | 249.1 | 467.1 | | | |
-| region, GOGC=100, 256 MiB ballast | 41112 | 0.083 | 2.7 | 3 | 11.5 | 254.0 | 353.8 | 97.4 | 2.6 | 0.6 |
+| base, GOGC=100 | 51922 | 33.0 | 4.2 | 40 | 3.5 | 40.2 | 86.6 | | | |
+| region, GOGC=100 | 43074 | 47.1 | 0.8 | 8 | 11.5 | 44.5 | 84.3 | 97.4 | 2.6 | 0.4 |
+| base, GOGC=50 | 49920 | 35.2 | 7.4 | 82 | 3.5 | 40.4 | 64.6 | | | |
+| region, GOGC=50 | 44650 | 45.4 | 1.1 | 12 | 11.5 | 45.0 | 66.6 | 97.4 | 2.6 | 0.5 |
+| base, GOGC=25 | 44553 | 40.6 | 15.4 | 186 | 3.5 | 40.2 | 54.7 | | | |
+| region, GOGC=25 | 41445 | 48.9 | 2.1 | 21 | 11.5 | 46.6 | 57.8 | 97.4 | 2.6 | 1.0 |
+| base, GOGC=100, 256 MiB ballast | 50681 | 37.4 | 13.3 | 7 | 3.5 | 243.5 | 450.9 | | | |
+| region, GOGC=100, 256 MiB ballast | 43943 | 48.6 | 4.3 | 3 | 11.5 | 224.9 | 344.3 | 97.4 | 2.6 | 0.2 |
+
+"CPU us/req" is the server process's kernel-accounted CPU time
+(`getrusage`) divided by requests. An earlier version of this table used
+the `runtime/metrics` CPU classes, which are only updated at GC cycles
+and, on an oversubscribed machine, count a descheduled P as busy; they
+reported about 60 us/req for every configuration and hid most of the
+region cost. "GC CPU %" is the runtime's GC CPU seconds over process CPU.
 
 "freed %" and "faded %" are shares of the bytes allocated inside regions;
 "abandoned %" is the share of regions that ended while the collector was
@@ -193,19 +200,15 @@ What the numbers say:
   region server runs with the same peak heap as the baseline at a
   seventh of the GC cost. This is the effect the goal statement was
   after, measured on the request/response path it named.
-- **The CPU saved is spent again, for now.** Total CPU per request is
-  about even at GOGC=100 (0.061 vs 0.064 ms) and 6-13% worse in
-  throughput overall, and clearly worse with the ballast. Three costs
-  stand against the GC saving: the request allocates 11.5 KB instead of
-  3.5 KB because `sync.Pool` is bypassed inside regions (`fmt`, `bufio`,
-  `textproto` and the JSON encoder all reuse objects through pools and
-  now allocate instead), every pointer store pays a `g.region` test and,
-  inside a region, a call with two span lookups, and each region exit
-  walks its spans. None of these is inherent: the upstream design
-  bump-allocates (making the extra allocation nearly free), places region
-  memory in a dedicated address range so the barrier is a mask-and-compare
-  rather than a span lookup, and the static analysis from the first part
-  of this study can elide the barrier on stores proven region-local.
+- **The CPU saved is spent again, and then some.** The region server
+  spends 45-49 us of CPU per request against 33-41 us for the baseline:
+  about 40% more at GOGC=100, 20% more at GOGC=25, 30% more with the
+  ballast, for 14-17% less throughput on this client-bound setup. The GC
+  saving is real (1.4 us/req at GOGC=100, 6.3 us/req at GOGC=25, 5 us/req
+  with the ballast) but the prototype pays about 15 us/req for it. Where
+  it goes is measured below; none of the three costs is inherent to the
+  design, but they are inherent to *this* implementation, which reuses
+  the size-class allocator instead of bump-allocating.
 - **Escapes are rare and legible.** 2.6% of request bytes fade, and the
   fade profile names each cause: cache inserts on a miss, the serialized
   order stored in the database, the per-request cancel context
@@ -222,11 +225,48 @@ What the numbers say:
   into 70% abandoned regions and 1488 cycles. Both are now fixed, and the
   GOGC=25 row above is the result.
 
+### Where the CPU goes
+
+Three measurements separate the costs (`results/restwork-toolchain-cmp.jsonl`,
+`results/restwork-rusage.txt`, `results/restwork-prof-{off,on}.txt`):
+
+1. *The inactive barrier is free.* A stock Go 1.27.0 toolchain and this
+   tree with regions off serve 48830 and 48704 req/s (means of three
+   300k-request runs), within noise. The compiled check is a 2-instruction
+   `CMPQ 0x20(R14), $0; JEQ` after each batch of pointer stores: 4961
+   test sites and 5453 conditional call sites in the server binary, 6.3%
+   more text. Programs that never enter a region pay nothing measurable.
+2. *Active region mode costs 43% more process CPU per request*
+   (35.0 us to 50.1 us by `getrusage`, two runs each at GOGC=100), while
+   GC CPU falls from 4.2% to 0.8%.
+3. *The CPU profile of region mode* (300k requests, 15.05 s of samples
+   against 10.09 s for regions off) attributes the extra time:
+
+   | where | share of region-mode CPU | notes |
+   |---|---:|---|
+   | region exit (`regionEnd`, `freeAll`, `resetSpan`, outer-stack scan) | 19% | walks all 136 cache slots and resets every tagged span: 3 bitmaps and the span struct per size class per request, plus atomic pacer counters |
+   | store check (`wbRegion` and callees) | 10% | `spanOf` plus three bitmap probes per checked store; most calls reach the slow path because most stored pointers are region objects |
+   | bulk-copy hooks (`regionBulkCheck`) | 2% | |
+   | allocation (`mallocgc` and zeroing) | 9% vs 8.5% off | 3.3x the bytes, but allocation itself is cheap; the cost of bypassing `sync.Pool` shows up as zeroing and as the extra store checks and span resets those objects cause |
+
+   The exit cost is the surprise. Bulk free was supposed to be the cheap
+   part, and it would be for a bump allocator (reset one pointer). With
+   size-class spans it is a fixed cost proportional to the number of
+   size classes touched, paid once per request regardless of how little
+   was allocated, and dominated by cache misses on span metadata that
+   the request did not otherwise touch. A real implementation would keep
+   a list of spans dirtied during the region, reset only those, batch the
+   pacer updates, and ideally allocate from one contiguous chunk per
+   region so that exit is a pointer reset.
+
 ### What is still open
 
-- The prototype's barrier and allocation costs, discussed above. The
-  honest statement is that this prototype demonstrates the memory and GC
-  effect of goroutine regions on a real server, not yet a net CPU win.
+- The prototype's CPU cost, measured above: 43% more CPU per request in
+  exchange for 3-5x less GC CPU and a smaller peak heap. The honest
+  statement is that this prototype demonstrates the memory and GC effect
+  of goroutine regions on a real server and shows exactly where a
+  production implementation would have to be cheaper; it is not a net
+  CPU win.
 - One crash remains unexplained: in two early sweeps (before the
   in-place sweep and the `growslice` barrier hook) the collector found a
   16-byte string object that a region had freed but that something still

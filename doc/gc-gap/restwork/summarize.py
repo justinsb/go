@@ -5,6 +5,12 @@ usage: summarize.py results/restwork.jsonl [results/restwork-summary.csv]
 """
 import collections, json, re, sys
 
+# GC CPU% is the runtime's GC CPU seconds (updated at each GC cycle, so a
+# little stale for runs with few cycles) over the kernel-accounted process
+# CPU time. The runtime/metrics total/idle classes are not used: they are
+# also only updated at GC cycles and overstate busy time when the machine
+# is oversubscribed.
+
 path = sys.argv[1]
 csv = sys.argv[2] if len(sys.argv) > 2 else None
 recs, buf = [], ''
@@ -23,7 +29,7 @@ for k, rs in groups.items():
     g = lambda f: mean([r[f] for r in rs])
     freed, faded, regions = g('region_freed_bytes'), g('region_faded_bytes'), g('region_regions')
     tot = freed + faded
-    row = dict(config=k, rps=g('req_per_s'), cpums=g('proc_cpu_us_per_req'), gc=100 * g('gc_cpu_frac'), gcs=g('gc_cycles'),
+    row = dict(config=k, rps=g('req_per_s'), cpums=g('proc_cpu_us_per_req'), gc=100 * g('cpu_gc_s') / g('proc_cpu_s'), gcs=g('gc_cycles'),
                alloc=g('alloc_bytes_per_req') / 1024, live=g('heap_live_bytes') / 2**20, peak=g('peak_heap_bytes') / 2**20,
                freedp=(100 * freed / tot if tot else 0), fadedp=(100 * faded / tot if tot else 0),
                aband=(100 * g('region_abandoned') / regions if regions else 0), n=len(rs))
