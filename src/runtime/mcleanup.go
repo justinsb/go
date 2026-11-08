@@ -83,6 +83,15 @@ func AddCleanup[T, S any](ptr *T, cleanup func(S), arg S) Cleanup {
 	ptr = abi.Escape(ptr)
 	cleanup = abi.Escape(cleanup)
 
+	if gp := getg(); gp.region != nil {
+		// The cleanup function is retained by the runtime; it and
+		// anything it references must not be freed with the region,
+		// and the records created below must live outside it.
+		regionFadePtr(gp, uintptr(*(*unsafe.Pointer)(unsafe.Pointer(&cleanup))))
+		gp.region.ignore++
+		defer func() { gp.region.ignore-- }()
+	}
+
 	// The pointer to the object must be valid.
 	if ptr == nil {
 		panic("runtime.AddCleanup: ptr is nil")

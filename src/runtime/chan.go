@@ -704,6 +704,15 @@ func recv(c *hchan, sg *sudog, ep unsafe.Pointer, unlockf func(), skip int) {
 		unlockf()
 		fatal("receive on synctest channel from outside bubble")
 	}
+	// The value is copied out of the blocked sender's stack by us, the
+	// receiver, so the sender's memory region (if any) must be told
+	// that the value escapes it; the sender is parked until goready
+	// below, so its region state can be updated from here.
+	if sgp := sg.g; sgp.region != nil && c.elemtype.Pointers() {
+		mp := acquirem()
+		regionBulkCheck(sgp, sgp.region, 0, uintptr(sg.elem.get()), c.elemtype.Size_, c.elemtype)
+		releasem(mp)
+	}
 	if c.dataqsiz == 0 {
 		if raceenabled {
 			racesync(c, sg)

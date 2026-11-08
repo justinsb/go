@@ -389,6 +389,11 @@ func bulkBarrierPreWrite(dst, src, size uintptr, typ *abi.Type) {
 	if (dst|src|size)&(goarch.PtrSize-1) != 0 {
 		throw("bulkBarrierPreWrite: unaligned arguments")
 	}
+	if gp := getg(); gp.region != nil && src != 0 {
+		mp := acquirem()
+		regionBulkCheck(gp, gp.region, dst, src, size, typ)
+		releasem(mp)
+	}
 	if !writeBarrier.enabled {
 		return
 	}
@@ -474,6 +479,14 @@ func bulkBarrierPreWrite(dst, src, size uintptr, typ *abi.Type) {
 func bulkBarrierPreWriteSrcOnly(dst, src, size uintptr, typ *abi.Type) {
 	if (dst|src|size)&(goarch.PtrSize-1) != 0 {
 		throw("bulkBarrierPreWrite: unaligned arguments")
+	}
+	if gp := getg(); gp.region != nil {
+		// Region escape check (see region.go): the destination is a
+		// fresh allocation, which may be outside the region (a large
+		// object, or allocated under region.Ignore).
+		mp := acquirem()
+		regionBulkCheck(gp, gp.region, dst, src, size, typ)
+		releasem(mp)
 	}
 	if !writeBarrier.enabled {
 		return
@@ -1468,6 +1481,11 @@ func typeBitsBulkBarrier(typ *_type, dst, src, size uintptr) {
 	if typ.Size_ != size {
 		println("runtime: typeBitsBulkBarrier with type ", toRType(typ).string(), " of size ", typ.Size_, " but memory size", size)
 		throw("runtime: invalid typeBitsBulkBarrier")
+	}
+	if gp := getg(); gp.region != nil {
+		mp := acquirem()
+		regionBulkCheck(gp, gp.region, dst, src, size, typ)
+		releasem(mp)
 	}
 	if !writeBarrier.enabled {
 		return

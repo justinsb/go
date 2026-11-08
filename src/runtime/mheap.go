@@ -513,6 +513,16 @@ type mspan struct {
 	specials              *special      // linked list of special records sorted by offset.
 	userArenaChunkFree    addrRange     // interval for managing chunk allocation
 	largeType             *_type        // malloc header for large objects.
+
+	// Memory region ownership (see region.go). region is non-nil while
+	// the span is cached by a region's private mcache or kept in its
+	// full list (regionNext). regionBase marks objects that do not
+	// belong to the region (pre-existing or faded in an earlier region);
+	// regionFaded marks objects that escaped the current region.
+	region      *regionState
+	regionNext  *mspan
+	regionBase  *gcBits
+	regionFaded *gcBits
 }
 
 func (s *mspan) base() uintptr {
@@ -1995,6 +2005,12 @@ func addspecial(p unsafe.Pointer, s *special, force bool) bool {
 	span := spanOfHeap(uintptr(p))
 	if span == nil {
 		throw("addspecial on invalid pointer")
+	}
+
+	// An object with a special (finalizer, cleanup, weak pointer,
+	// profile record) must not be freed by its region.
+	if gp := getg().m.curg; gp != nil && gp.region != nil {
+		regionFadePtr(gp, uintptr(p))
 	}
 
 	// Ensure that the span is swept.

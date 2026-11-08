@@ -24,6 +24,7 @@ import (
 	"net/url"
 	urlpkg "net/url"
 	"path"
+	"region"
 	"runtime"
 	"slices"
 	"strconv"
@@ -295,7 +296,7 @@ type conn struct {
 	// on this connection, if any.
 	lastMethod string
 
-	curReq atomic.Pointer[response] // (which has a Request in it)
+	curReq atomic.Pointer[closeNotifier] // CloseNotify state of the in-flight request
 
 	curState atomic.Uint64 // packed (unixtime<<8|uint8(ConnState))
 
@@ -490,12 +491,11 @@ type response struct {
 	clenBuf   [10]byte
 	statusBuf [3]byte
 
-	// lazyCloseNotifyMu protects closeNotifyCh and closeNotifyTriggered.
-	lazyCloseNotifyMu sync.Mutex
-	// closeNotifyCh is the channel returned by CloseNotify.
-	closeNotifyCh chan bool
-	// closeNotifyTriggered tracks prior closeNotify calls.
-	closeNotifyTriggered bool
+	// cn carries the CloseNotify state. It is shared with the
+	// connection's background read goroutine (via conn.curReq), so it
+	// is allocated outside the request's memory region; see
+	// newCloseNotifier.
+	cn *closeNotifier
 }
 
 func (c *response) SetReadDeadline(deadline time.Time) error {
@@ -815,8 +815,8 @@ func (cr *connReader) handleReadErrorLocked(_ error) {
 		return
 	}
 	cr.conn.cancelCtx()
-	if res := cr.conn.curReq.Load(); res != nil {
-		res.closeNotify()
+	if cn := cr.conn.curReq.Load(); cn != nil {
+		cn.notify()
 	}
 }
 
@@ -1109,6 +1109,7 @@ func (c *conn) readRequest(ctx context.Context) (w *response, err error) {
 		reqBody:       reqBody,
 		handlerHeader: make(Header),
 		contentLength: -1,
+		cn:            newCloseNotifier(),
 
 		// We populate these ahead of time so we're not
 		// reading from req.Header after their Handler starts
@@ -1945,33 +1946,42 @@ func isCommonNetReadError(err error) bool {
 	return false
 }
 
+// serveRecover is deferred by serve: it logs a handler panic and
+// closes the connection, aborting the in-flight request if any.
+func (c *conn) serveRecover(inFlight **response) {
+	inFlightResponse := *inFlight
+	if err := recover(); err != nil && err != ErrAbortHandler {
+		const size = 64 << 10
+		buf := make([]byte, size)
+		buf = buf[:runtime.Stack(buf, false)]
+		c.server.logf("http: panic serving %v: %v\n%s", c.remoteAddr, err, buf)
+	}
+	if inFlightResponse != nil {
+		inFlightResponse.cancelCtx()
+		inFlightResponse.disableWriteContinue(true)
+	}
+	if !c.hijacked() {
+		if inFlightResponse != nil {
+			inFlightResponse.conn.r.abortPendingRead()
+			inFlightResponse.reqBody.Close()
+		}
+		c.close()
+		c.setState(c.rwc, StateClosed, runHooks)
+	}
+}
+
 // Serve a new connection.
 func (c *conn) serve(ctx context.Context) {
 	if ra := c.rwc.RemoteAddr(); ra != nil {
 		c.remoteAddr = ra.String()
 	}
 	ctx = context.WithValue(ctx, LocalAddrContextKey, c.rwc.LocalAddr())
+	// inFlightResponse stays on this frame (its address is only passed to
+	// the deferred call and to serveRequest), so that pointing it at the
+	// current response does not make the response escape its memory
+	// region; see package region.
 	var inFlightResponse *response
-	defer func() {
-		if err := recover(); err != nil && err != ErrAbortHandler {
-			const size = 64 << 10
-			buf := make([]byte, size)
-			buf = buf[:runtime.Stack(buf, false)]
-			c.server.logf("http: panic serving %v: %v\n%s", c.remoteAddr, err, buf)
-		}
-		if inFlightResponse != nil {
-			inFlightResponse.cancelCtx()
-			inFlightResponse.disableWriteContinue(true)
-		}
-		if !c.hijacked() {
-			if inFlightResponse != nil {
-				inFlightResponse.conn.r.abortPendingRead()
-				inFlightResponse.reqBody.Close()
-			}
-			c.close()
-			c.setState(c.rwc, StateClosed, runHooks)
-		}
-	}()
+	defer c.serveRecover(&inFlightResponse)
 
 	type connectionStater interface {
 		ConnectionState() tls.ConnectionState
@@ -2072,134 +2082,154 @@ func (c *conn) serve(ctx context.Context) {
 	// HTTP/1.x from here on.
 
 	for {
-		w, err := c.readRequest(ctx)
-		if c.r.remain != c.server.initialReadLimitSize() {
-			// If we read any bytes off the wire, we're active.
-			c.setState(c.rwc, StateActive, runHooks)
-		}
-		if c.server.shuttingDown() {
-			return
-		}
-		if err != nil {
-			const errorHeaders = "\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
-
-			switch {
-			case err == errTooLarge:
-				// Their HTTP client may or may not be
-				// able to read this if we're
-				// responding to them and hanging up
-				// while they're still writing their
-				// request. Undefined behavior.
-				const publicErr = "431 Request Header Fields Too Large"
-				fmt.Fprintf(c.rwc, "HTTP/1.1 "+publicErr+errorHeaders+publicErr)
-				c.closeWriteAndWait()
-				return
-
-			case isUnsupportedTEError(err):
-				// Respond as per RFC 7230 Section 3.3.1 which says,
-				//      A server that receives a request message with a
-				//      transfer coding it does not understand SHOULD
-				//      respond with 501 (Unimplemented).
-				code := StatusNotImplemented
-
-				// We purposefully aren't echoing back the transfer-encoding's value,
-				// so as to mitigate the risk of cross side scripting by an attacker.
-				fmt.Fprintf(c.rwc, "HTTP/1.1 %d %s%sUnsupported transfer encoding", code, StatusText(code), errorHeaders)
-				return
-
-			case isCommonNetReadError(err):
-				return // don't reply
-
-			default:
-				if v, ok := err.(statusError); ok {
-					fmt.Fprintf(c.rwc, "HTTP/1.1 %d %s: %s%s%d %s: %s", v.code, StatusText(v.code), v.text, errorHeaders, v.code, StatusText(v.code), v.text)
-					return
-				}
-				const publicErr = "400 Bad Request"
-				fmt.Fprintf(c.rwc, "HTTP/1.1 "+publicErr+errorHeaders+publicErr)
-				return
-			}
-		}
-
-		// Expect 100 Continue support
-		req := w.req
-		if req.expectsContinue() {
-			if req.ProtoAtLeast(1, 1) && req.ContentLength != 0 {
-				// Wrap the Body reader with one that replies on the connection
-				w.ecReader = &expectContinueReader{readCloser: req.Body, resp: w}
-				w.canWriteContinue.Store(true)
-				req.Body = w.ecReader
-			}
-		} else if req.Header.get("Expect") != "" {
-			w.sendExpectationFailed()
-			return
-		}
-
-		c.curReq.Store(w)
-
-		// Start background read, which detects when a client has closed its connection
-		// while a request handler is still running. When the request has a body, we
-		// start the background read only after the entire body has been consumed.
-		if w.reqBody.bodyRemains() {
-			w.reqBody.registerOnHitEOF(w.conn.r.startBackgroundRead)
+		var next bool
+		if httpregion.Value() == "1" {
+			// Serve the request in a goroutine-local memory region
+			// (see package region): everything allocated for it that
+			// does not escape is reclaimed when the region ends.
+			region.Do(func() { next = c.serveRequest(ctx, &inFlightResponse) })
 		} else {
-			w.conn.r.startBackgroundRead()
+			next = c.serveRequest(ctx, &inFlightResponse)
 		}
-
-		// HTTP cannot have multiple simultaneous active requests.[*]
-		// Until the server replies to this request, it can't read another,
-		// so we might as well run the handler in this goroutine.
-		// [*] Not strictly true: HTTP pipelining. We could let them all process
-		// in parallel even if their responses need to be serialized.
-		// But we're not going to implement HTTP pipelining because it
-		// was never deployed in the wild and the answer is HTTP/2.
-		inFlightResponse = w
-		serverHandler{c.server}.ServeHTTP(w, w.req)
-		inFlightResponse = nil
-		w.cancelCtx()
-		if c.hijacked() {
-			c.r.releaseConn()
+		if !next {
 			return
-		}
-		w.finishRequest()
-		c.rwc.SetWriteDeadline(time.Time{})
-		if !w.shouldReuseConnection() {
-			if w.requestBodyLimitHit || w.closedRequestBodyEarly() {
-				c.closeWriteAndWait()
-			}
-			return
-		}
-		c.setState(c.rwc, StateIdle, runHooks)
-		c.curReq.Store(nil)
-
-		if !w.conn.server.doKeepAlives() {
-			// We're in shutdown mode. We might've replied
-			// to the user without "Connection: close" and
-			// they might think they can send another
-			// request, but such is life with HTTP/1.1.
-			return
-		}
-
-		if d := c.server.idleTimeout(); d > 0 {
-			c.rwc.SetReadDeadline(time.Now().Add(d))
-		} else {
-			c.rwc.SetReadDeadline(time.Time{})
-		}
-
-		// Wait for the connection to become readable again before trying to
-		// read the next request. This prevents a ReadHeaderTimeout or
-		// ReadTimeout from starting until the first bytes of the next request
-		// have been received.
-		if _, err := c.bufr.Peek(4); err != nil {
-			return
-		}
-
-		if d := c.server.readHeaderTimeout(); d > 0 {
-			c.rwc.SetReadDeadline(time.Now().Add(d))
-		} else {
-			c.rwc.SetReadDeadline(time.Time{})
 		}
 	}
+}
+
+// serveRequest reads and serves one HTTP/1.x request on c. It reports
+// whether the connection should go on to serve another request.
+// inFlight is set to the response while the handler runs, for the
+// panic recovery in serve.
+func (c *conn) serveRequest(ctx context.Context, inFlight **response) bool {
+	w, err := c.readRequest(ctx)
+	if c.r.remain != c.server.initialReadLimitSize() {
+		// If we read any bytes off the wire, we're active.
+		c.setState(c.rwc, StateActive, runHooks)
+	}
+	if c.server.shuttingDown() {
+		return false
+	}
+	if err != nil {
+		const errorHeaders = "\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\n"
+
+		switch {
+		case err == errTooLarge:
+			// Their HTTP client may or may not be
+			// able to read this if we're
+			// responding to them and hanging up
+			// while they're still writing their
+			// request. Undefined behavior.
+			const publicErr = "431 Request Header Fields Too Large"
+			fmt.Fprintf(c.rwc, "HTTP/1.1 "+publicErr+errorHeaders+publicErr)
+			c.closeWriteAndWait()
+			return false
+
+		case isUnsupportedTEError(err):
+			// Respond as per RFC 7230 Section 3.3.1 which says,
+			//      A server that receives a request message with a
+			//      transfer coding it does not understand SHOULD
+			//      respond with 501 (Unimplemented).
+			code := StatusNotImplemented
+
+			// We purposefully aren't echoing back the transfer-encoding's value,
+			// so as to mitigate the risk of cross side scripting by an attacker.
+			fmt.Fprintf(c.rwc, "HTTP/1.1 %d %s%sUnsupported transfer encoding", code, StatusText(code), errorHeaders)
+			return false
+
+		case isCommonNetReadError(err):
+			return false // don't reply
+
+		default:
+			if v, ok := err.(statusError); ok {
+				fmt.Fprintf(c.rwc, "HTTP/1.1 %d %s: %s%s%d %s: %s", v.code, StatusText(v.code), v.text, errorHeaders, v.code, StatusText(v.code), v.text)
+				return false
+			}
+			const publicErr = "400 Bad Request"
+			fmt.Fprintf(c.rwc, "HTTP/1.1 "+publicErr+errorHeaders+publicErr)
+			return false
+		}
+	}
+
+	// Expect 100 Continue support
+	req := w.req
+	if req.expectsContinue() {
+		if req.ProtoAtLeast(1, 1) && req.ContentLength != 0 {
+			// Wrap the Body reader with one that replies on the connection
+			w.ecReader = &expectContinueReader{readCloser: req.Body, resp: w}
+			w.canWriteContinue.Store(true)
+			req.Body = w.ecReader
+		}
+	} else if req.Header.get("Expect") != "" {
+		w.sendExpectationFailed()
+		return false
+	}
+
+	c.curReq.Store(w.cn)
+
+	// Start background read, which detects when a client has closed its connection
+	// while a request handler is still running. When the request has a body, we
+	// start the background read only after the entire body has been consumed.
+	if w.reqBody.bodyRemains() {
+		w.reqBody.registerOnHitEOF(w.conn.r.startBackgroundRead)
+	} else {
+		w.conn.r.startBackgroundRead()
+	}
+
+	// HTTP cannot have multiple simultaneous active requests.[*]
+	// Until the server replies to this request, it can't read another,
+	// so we might as well run the handler in this goroutine.
+	// [*] Not strictly true: HTTP pipelining. We could let them all process
+	// in parallel even if their responses need to be serialized.
+	// But we're not going to implement HTTP pipelining because it
+	// was never deployed in the wild and the answer is HTTP/2.
+	*inFlight = w
+	serverHandler{c.server}.ServeHTTP(w, w.req)
+	*inFlight = nil
+	w.cancelCtx()
+	if c.hijacked() {
+		c.r.releaseConn()
+		return false
+	}
+	w.finishRequest()
+	c.rwc.SetWriteDeadline(time.Time{})
+	if !w.shouldReuseConnection() {
+		if w.requestBodyLimitHit || w.closedRequestBodyEarly() {
+			c.closeWriteAndWait()
+		}
+		return false
+	}
+	c.setState(c.rwc, StateIdle, runHooks)
+	c.curReq.Store(nil)
+
+	if !w.conn.server.doKeepAlives() {
+		// We're in shutdown mode. We might've replied
+		// to the user without "Connection: close" and
+		// they might think they can send another
+		// request, but such is life with HTTP/1.1.
+		return false
+	}
+
+	if d := c.server.idleTimeout(); d > 0 {
+		c.rwc.SetReadDeadline(time.Now().Add(d))
+	} else {
+		c.rwc.SetReadDeadline(time.Time{})
+	}
+
+	// Wait for the connection to become readable again before trying to
+	// read the next request. This prevents a ReadHeaderTimeout or
+	// ReadTimeout from starting until the first bytes of the next request
+	// have been received.
+	if _, err := c.bufr.Peek(4); err != nil {
+		return false
+	}
+
+	if d := c.server.readHeaderTimeout(); d > 0 {
+		c.rwc.SetReadDeadline(time.Now().Add(d))
+	} else {
+		c.rwc.SetReadDeadline(time.Time{})
+	}
+	return true
 }
 
 // unencryptedHTTP2Request is an HTTP handler that initializes
@@ -2321,29 +2351,51 @@ func (w *response) Hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error) {
 }
 
 func (w *response) CloseNotify() <-chan bool {
-	w.lazyCloseNotifyMu.Lock()
-	defer w.lazyCloseNotifyMu.Unlock()
 	if w.handlerDone.Load() {
 		panic("net/http: CloseNotify called after ServeHTTP finished")
 	}
-	if w.closeNotifyCh == nil {
-		w.closeNotifyCh = make(chan bool, 1)
-		if w.closeNotifyTriggered {
-			w.closeNotifyCh <- true // action prior closeNotify call
-		}
-	}
-	return w.closeNotifyCh
+	return w.cn.channel()
 }
 
-func (w *response) closeNotify() {
-	w.lazyCloseNotifyMu.Lock()
-	defer w.lazyCloseNotifyMu.Unlock()
-	if w.closeNotifyTriggered {
+// closeNotifier is the per-request CloseNotify state. The background
+// read goroutine of the connection triggers it when the client goes
+// away, which is why it is allocated outside the request's memory
+// region: a pointer to it is stored in the connection.
+type closeNotifier struct {
+	// mu protects ch and triggered.
+	mu sync.Mutex
+	// ch is the channel returned by CloseNotify.
+	ch chan bool
+	// triggered tracks prior notify calls.
+	triggered bool
+}
+
+func newCloseNotifier() (cn *closeNotifier) {
+	region.Ignore(func() { cn = &closeNotifier{} })
+	return cn
+}
+
+func (cn *closeNotifier) channel() <-chan bool {
+	cn.mu.Lock()
+	defer cn.mu.Unlock()
+	if cn.ch == nil {
+		region.Ignore(func() { cn.ch = make(chan bool, 1) })
+		if cn.triggered {
+			cn.ch <- true // action prior notify call
+		}
+	}
+	return cn.ch
+}
+
+func (cn *closeNotifier) notify() {
+	cn.mu.Lock()
+	defer cn.mu.Unlock()
+	if cn.triggered {
 		return // already triggered
 	}
-	w.closeNotifyTriggered = true
-	if w.closeNotifyCh != nil {
-		w.closeNotifyCh <- true
+	cn.triggered = true
+	if cn.ch != nil {
+		cn.ch <- true
 	}
 }
 
@@ -3990,6 +4042,10 @@ func (s *Server) onceSetNextProtoDefaults_Serve() {
 }
 
 var http2server = godebug.New("http2server")
+
+// httpregion=1 serves each HTTP/1.x request in a memory region
+// (package region, prototype).
+var httpregion = godebug.New("#httpregion")
 
 // onceSetNextProtoDefaults configures HTTP/2, if the user hasn't
 // configured otherwise. (by setting s.TLSNextProto non-nil)

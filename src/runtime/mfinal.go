@@ -430,6 +430,14 @@ func blockUntilEmptyFinalizerQueue(timeout int64) bool {
 // need to use appropriate synchronization, such as mutexes or atomic updates,
 // to avoid read-write races.
 func SetFinalizer(obj any, finalizer any) {
+	if gp := getg(); gp.region != nil {
+		// The finalizer function is retained by the runtime; it and
+		// anything it references must not be freed with the region.
+		// The object itself is faded by addspecial.
+		regionFadePtr(gp, uintptr(efaceOf(&finalizer).data))
+		gp.region.ignore++
+		defer func() { gp.region.ignore-- }()
+	}
 	e := efaceOf(&obj)
 	etyp := e._type
 	if etyp == nil {

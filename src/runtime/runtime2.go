@@ -480,6 +480,11 @@ type g struct {
 	stackguard0 uintptr // offset known to cmd/internal/obj/*
 	stackguard1 uintptr // offset known to cmd/internal/obj/*
 
+	// region is non-nil while the goroutine is inside region.Do.
+	// Its offset is abi.GRegionOffset; the compiler loads it in the
+	// write barrier sequence. See region.go.
+	region *regionState
+
 	_panic    *_panic // innermost panic
 	_defer    *_defer // innermost defer
 	m         *m      // current m
@@ -549,21 +554,26 @@ type g struct {
 	runningCleanups atomic.Bool
 	sig             uint32
 	secret          int32 // current nesting of runtime/secret.Do calls.
-	writebuf        []byte
-	sigcode0        uintptr
-	sigcode1        uintptr
-	sigpc           uintptr
-	parentGoid      uint64          // goid of goroutine that created this goroutine
-	gopc            uintptr         // pc of go statement that created this goroutine
-	ancestors       *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
-	startpc         uintptr         // pc of goroutine function
-	racectx         uintptr
-	waiting         *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
-	cgoCtxt         []uintptr      // cgo traceback context
-	labels          unsafe.Pointer // profiler labels
-	timer           *timer         // cached timer for time.Sleep
-	sleepWhen       int64          // when to sleep until
-	selectDone      atomic.Uint32  // are we participating in a select and did someone win the race?
+
+	// regionCache holds the goroutine's region allocation state across
+	// region.Do calls so that spans are reused from one region to the
+	// next. Released in gdestroy.
+	regionCache *regionState
+	writebuf    []byte
+	sigcode0    uintptr
+	sigcode1    uintptr
+	sigpc       uintptr
+	parentGoid  uint64          // goid of goroutine that created this goroutine
+	gopc        uintptr         // pc of go statement that created this goroutine
+	ancestors   *[]ancestorInfo // ancestor information goroutine(s) that created this goroutine (only used if debug.tracebackancestors)
+	startpc     uintptr         // pc of goroutine function
+	racectx     uintptr
+	waiting     *sudog         // sudog structures this g is waiting on (that have a valid elem ptr); in lock order
+	cgoCtxt     []uintptr      // cgo traceback context
+	labels      unsafe.Pointer // profiler labels
+	timer       *timer         // cached timer for time.Sleep
+	sleepWhen   int64          // when to sleep until
+	selectDone  atomic.Uint32  // are we participating in a select and did someone win the race?
 
 	// goroutineProfiled indicates the status of this goroutine's stack for the
 	// current in-progress goroutine profile

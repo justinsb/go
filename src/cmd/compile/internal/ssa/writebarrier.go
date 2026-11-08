@@ -11,6 +11,7 @@ import (
 	"cmd/internal/objabi"
 	"cmd/internal/src"
 	"fmt"
+	"internal/abi"
 	"internal/buildcfg"
 )
 
@@ -173,7 +174,7 @@ func writebarrier(f *Func) {
 
 	var sb, sp, wbaddr, const0 *Value
 	var cgoCheckPtrWrite, cgoCheckMemmove *obj.LSym
-	var wbZero, wbMove *obj.LSym
+	var wbZero, wbMove, wbRegion, wbRegionMove *obj.LSym
 	var stores, after []*Value
 	var sset, sset2 *sparseSet
 	var storeNumber []int32
@@ -227,6 +228,8 @@ func writebarrier(f *Func) {
 			wbaddr = f.Entry.NewValue1A(initpos, OpAddr, f.Config.Types.UInt32Ptr, wbsym, sb)
 			wbZero = f.fe.Syslook("wbZero")
 			wbMove = f.fe.Syslook("wbMove")
+			wbRegion = f.fe.Syslook("wbRegion")
+			wbRegionMove = f.fe.Syslook("wbRegionMove")
 			if buildcfg.Experiment.CgoCheck2 {
 				cgoCheckPtrWrite = f.fe.Syslook("cgoCheckPtrWrite")
 				cgoCheckMemmove = f.fe.Syslook("cgoCheckMemmove")
@@ -370,9 +373,10 @@ func writebarrier(f *Func) {
 			e.b.Preds[e.i].b = bEnd
 		}
 
+		cfgtypes := &f.Config.Types
+
 		// set up control flow for write barrier test
 		// load word, test word, avoiding partial register write from load byte.
-		cfgtypes := &f.Config.Types
 		flag := b.NewValue2(pos, OpLoad, cfgtypes.UInt32, wbaddr, mem)
 		flag = b.NewValue2(pos, OpNeq32, cfgtypes.Bool, flag, const0)
 		b.Kind = BlockIf
@@ -561,14 +565,77 @@ func writebarrier(f *Func) {
 		// pass to determine what parts of the code are preemption-unsafe.
 		// All subsequent memory operations use this memory, so we have to sacrifice the
 		// previous last memory op to become this new value.
-		bEnd.Values = append(bEnd.Values, last)
-		last.Block = bEnd
-		last.reset(OpWBend)
+		wbend := bEnd.NewValue1(last.Pos.WithNotStmt(), OpWBend, types.TypeMem, mem)
+
+		// Memory region escape check (see runtime/region.go). After the
+		// stores are done, if the current goroutine is inside a region
+		// (g.region != nil), call wbRegion for every pointer stored and
+		// wbRegionMove for every typed move. The check runs after the
+		// whole batch of stores, not before, because it walks the
+		// object graph: a pointer stored earlier in the same batch must
+		// be visible to it. It is outside the preemption-unsafe region
+		// that ends at WBend, so the calls are ordinary calls.
+		//
+		// bEnd ends with the region test; bRegion holds the calls; bAfter
+		// takes over bEnd's role as the continuation of the block.
+		bRegion := f.NewBlock(BlockPlain)
+		bAfter := f.NewBlock(bEnd.Kind)
+		bRegion.Pos = pos
+		bAfter.Pos = bEnd.Pos
+		bAfter.CopyControls(bEnd)
+		bAfter.Likely = bEnd.Likely
+		for _, e := range bEnd.Succs {
+			bAfter.Succs = append(bAfter.Succs, e)
+			e.b.Preds[e.i].b = bAfter
+		}
+		bEnd.ResetControls()
+		{
+			g := bEnd.NewValue1(pos, OpGetG, cfgtypes.BytePtr, wbend)
+			raddr := bEnd.NewValue1I(pos, OpOffPtr, cfgtypes.BytePtrPtr, abi.GRegionOffset, g)
+			rval := bEnd.NewValue2(pos, OpLoad, cfgtypes.BytePtr, raddr, wbend)
+			rflag := bEnd.NewValue1(pos, OpIsNonNil, cfgtypes.Bool, rval)
+			bEnd.Kind = BlockIf
+			bEnd.SetControl(rflag)
+			bEnd.Likely = BranchUnlikely
+			// The branch belongs to the store, not to whatever
+			// statement ended the original block.
+			bEnd.Pos = pos.WithNotStmt()
+			bEnd.Succs = bEnd.Succs[:0]
+			bEnd.AddEdgeTo(bRegion)
+			bEnd.AddEdgeTo(bAfter)
+			bRegion.AddEdgeTo(bAfter)
+		}
+		memRegion := wbend
+		for _, w := range stores {
+			dst := w.Args[0]
+			if dst == nilcheck {
+				dst = nilcheckEnd
+			}
+			switch w.Op {
+			case OpStoreWB:
+				val := w.Args[1]
+				if !needWBsrc(val) {
+					continue
+				}
+				memRegion = wbcall(w.Pos, bRegion, wbRegion, sp, memRegion, dst, val)
+			case OpMoveWB:
+				// The data has been moved; let the runtime read the
+				// pointers from the destination.
+				typ := reflectdata.TypeLinksym(w.Aux.(*types.Type))
+				taddr := b.NewValue1A(pos, OpAddr, cfgtypes.Uintptr, typ, sb)
+				memRegion = wbcall(w.Pos, bRegion, wbRegionMove, sp, memRegion, taddr, dst, dst)
+			}
+		}
+		// last becomes the merge of the two paths, so that everything
+		// that used the last store's memory now uses the merged memory.
+		bAfter.Values = append(bAfter.Values, last)
+		last.Block = bAfter
+		last.reset(OpPhi)
 		last.Pos = last.Pos.WithNotStmt()
 		last.Type = types.TypeMem
-		last.AddArg(mem)
+		last.AddArgs(wbend, memRegion)
 
-		// Free all the old stores, except last which became the WBend marker.
+		// Free all the old stores, except last which became the merge.
 		for _, w := range stores {
 			if w != last {
 				w.resetArgs()
@@ -583,10 +650,10 @@ func writebarrier(f *Func) {
 			nilcheck.reset(OpInvalid)
 		}
 
-		// put values after the store sequence into the end block
-		bEnd.Values = append(bEnd.Values, after...)
+		// put values after the store sequence into the continuation block
+		bAfter.Values = append(bAfter.Values, after...)
 		for _, w := range after {
-			w.Block = bEnd
+			w.Block = bAfter
 		}
 
 		// if we have more stores in this block, do this block again

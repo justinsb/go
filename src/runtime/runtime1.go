@@ -304,6 +304,8 @@ type dbgVar struct {
 var debug struct {
 	cgocheck                 int32
 	clobberfree              int32
+	regions                  int32
+	regiontrace              int32
 	containermaxprocs        int32
 	decoratemappings         int32
 	disablethp               int32
@@ -359,6 +361,8 @@ var dbgvars = []*dbgVar{
 	{name: "asyncpreemptoff", value: &debug.asyncpreemptoff},
 	{name: "cgocheck", value: &debug.cgocheck},
 	{name: "clobberfree", value: &debug.clobberfree},
+	{name: "regions", value: &debug.regions, def: 1},
+	{name: "regiontrace", value: &debug.regiontrace},
 	{name: "containermaxprocs", value: &debug.containermaxprocs, def: 1},
 	{name: "dataindependenttiming", value: &debug.dataindependenttiming},
 	{name: "decoratemappings", value: &debug.decoratemappings, def: 1},

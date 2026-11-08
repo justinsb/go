@@ -137,6 +137,9 @@ var depsRules = `
 	RUNTIME
 	< arena;
 
+	RUNTIME
+	< region;
+
 	syscall !< io;
 	reflect !< sort;
 
@@ -223,7 +226,7 @@ var depsRules = `
 
 	# FMT is OS (which includes string routines) plus reflect and fmt.
 	# It does not include package log, which should be avoided in core packages.
-	arena, strconv, unicode
+	arena, region, strconv, unicode
 	< reflect;
 
 	os, reflect

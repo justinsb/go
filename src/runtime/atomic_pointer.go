@@ -27,6 +27,14 @@ import (
 // Do not remove or change the type signature.
 // See go.dev/issue/67401.
 //
+// atomicwbRegion performs the region escape check for an atomic
+// pointer store; see region.go.
+//
+//go:nosplit
+func atomicwbRegion(ptr *unsafe.Pointer, new unsafe.Pointer) {
+	wbRegion((*uintptr)(unsafe.Pointer(ptr)), uintptr(new))
+}
+
 //go:linkname atomicwb
 //go:nosplit
 func atomicwb(ptr *unsafe.Pointer, new unsafe.Pointer) {
@@ -40,6 +48,9 @@ func atomicwb(ptr *unsafe.Pointer, new unsafe.Pointer) {
 //
 //go:nosplit
 func atomicstorep(ptr unsafe.Pointer, new unsafe.Pointer) {
+	if getg().region != nil {
+		atomicwbRegion((*unsafe.Pointer)(ptr), new)
+	}
 	if writeBarrier.enabled {
 		atomicwb((*unsafe.Pointer)(ptr), new)
 	}
@@ -64,6 +75,9 @@ func atomic_storePointer(ptr *unsafe.Pointer, new unsafe.Pointer) {
 //go:nosplit
 //go:linkname atomic_casPointer internal/runtime/atomic.casPointer
 func atomic_casPointer(ptr *unsafe.Pointer, old, new unsafe.Pointer) bool {
+	if getg().region != nil {
+		atomicwbRegion(ptr, new)
+	}
 	if writeBarrier.enabled {
 		atomicwb(ptr, new)
 	}
@@ -83,6 +97,9 @@ func sync_atomic_StoreUintptr(ptr *uintptr, new uintptr)
 //go:linkname sync_atomic_StorePointer sync/atomic.StorePointer
 //go:nosplit
 func sync_atomic_StorePointer(ptr *unsafe.Pointer, new unsafe.Pointer) {
+	if getg().region != nil {
+		atomicwbRegion(ptr, new)
+	}
 	if writeBarrier.enabled {
 		atomicwb(ptr, new)
 	}
@@ -98,6 +115,9 @@ func sync_atomic_SwapUintptr(ptr *uintptr, new uintptr) uintptr
 //go:linkname sync_atomic_SwapPointer sync/atomic.SwapPointer
 //go:nosplit
 func sync_atomic_SwapPointer(ptr *unsafe.Pointer, new unsafe.Pointer) unsafe.Pointer {
+	if getg().region != nil {
+		atomicwbRegion(ptr, new)
+	}
 	if writeBarrier.enabled {
 		atomicwb(ptr, new)
 	}
@@ -114,6 +134,9 @@ func sync_atomic_CompareAndSwapUintptr(ptr *uintptr, old, new uintptr) bool
 //go:linkname sync_atomic_CompareAndSwapPointer sync/atomic.CompareAndSwapPointer
 //go:nosplit
 func sync_atomic_CompareAndSwapPointer(ptr *unsafe.Pointer, old, new unsafe.Pointer) bool {
+	if getg().region != nil {
+		atomicwbRegion(ptr, new)
+	}
 	if writeBarrier.enabled {
 		atomicwb(ptr, new)
 	}

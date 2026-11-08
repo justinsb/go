@@ -496,7 +496,21 @@ func goready(gp *g, traceskip int) {
 	})
 }
 
+// newSudogOutsideRegion allocates a sudog from the ordinary heap even
+// if the current goroutine is inside a memory region (see region.go).
+//
 //go:nosplit
+func newSudogOutsideRegion() *sudog {
+	gp := getg().m.curg
+	if gp == nil || gp.region == nil {
+		return new(sudog)
+	}
+	gp.region.ignore++
+	s := new(sudog)
+	gp.region.ignore--
+	return s
+}
+
 func acquireSudog() *sudog {
 	// Delicate dance: the semaphore implementation calls
 	// acquireSudog, acquireSudog calls new(sudog),
@@ -520,7 +534,9 @@ func acquireSudog() *sudog {
 		unlock(&sched.sudoglock)
 		// If the central cache is empty, allocate a new one.
 		if len(pp.sudogcache) == 0 {
-			pp.sudogcache = append(pp.sudogcache, new(sudog))
+			// Sudogs are shared runtime structures (they end up in wait
+			// queues and caches); keep them out of memory regions.
+			pp.sudogcache = append(pp.sudogcache, newSudogOutsideRegion())
 		}
 	}
 	n := len(pp.sudogcache)
@@ -4540,6 +4556,9 @@ func gdestroy(gp *g) {
 	gp.bubble = nil
 	gp.fipsOnlyBypass = false
 	gp.secret = 0
+	if gp.regionCache != nil {
+		regionRelease(gp)
+	}
 
 	if gcBlackenEnabled != 0 && gp.gcAssistBytes > 0 {
 		// Flush assist credit to the global pool. This gives
@@ -5352,6 +5371,11 @@ func newproc(fn *funcval) {
 func newproc1(fn *funcval, callergp *g, callerpc uintptr, parked bool, waitreason waitReason) *g {
 	if fn == nil {
 		fatal("go of nil func value")
+	}
+	// The closure (and whatever it captures) becomes visible to the
+	// new goroutine, so it must not stay in the caller's region.
+	if callergp.region != nil {
+		regionFadePtr(callergp, uintptr(unsafe.Pointer(fn)))
 	}
 
 	mp := acquirem() // disable preemption because we hold M and P in local vars.

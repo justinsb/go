@@ -101,6 +101,13 @@ func (p *Pool) Put(x any) {
 	if x == nil {
 		return
 	}
+	if runtime_regionActive() {
+		// Inside a memory region, objects are reclaimed in bulk when
+		// the region ends, so there is nothing to gain from pooling
+		// and keeping x would make it (and everything it references)
+		// escape the region. Drop it.
+		return
+	}
 	if race.Enabled {
 		if runtime_randn(4) == 0 {
 			// Randomly drop x on floor.
@@ -130,6 +137,13 @@ func (p *Pool) Put(x any) {
 // If Get would otherwise return nil and p.New is non-nil, Get returns
 // the result of calling p.New.
 func (p *Pool) Get() any {
+	if runtime_regionActive() {
+		// See Put.
+		if p.New != nil {
+			return p.New()
+		}
+		return nil
+	}
 	if race.Enabled {
 		race.Disable()
 	}
@@ -307,3 +321,7 @@ func indexLocal(l unsafe.Pointer, i int) *poolLocal {
 func runtime_registerPoolCleanup(cleanup func())
 func runtime_procPin() int
 func runtime_procUnpin()
+
+// runtime_regionActive reports whether the calling goroutine is inside a
+// memory region (see package region). Implemented in the runtime.
+func runtime_regionActive() bool

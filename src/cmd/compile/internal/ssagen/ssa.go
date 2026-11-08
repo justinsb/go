@@ -168,6 +168,8 @@ func InitConfig() {
 	ir.Syms.TypeAssert = typecheck.LookupRuntimeFunc("typeAssert")
 	ir.Syms.WBZero = typecheck.LookupRuntimeFunc("wbZero")
 	ir.Syms.WBMove = typecheck.LookupRuntimeFunc("wbMove")
+	ir.Syms.WBRegion = typecheck.LookupRuntimeFunc("wbRegion")
+	ir.Syms.WBRegionMove = typecheck.LookupRuntimeFunc("wbRegionMove")
 	ir.Syms.X86HasAVX = typecheck.LookupRuntimeVar("x86HasAVX")                       // bool
 	ir.Syms.X86HasFMA = typecheck.LookupRuntimeVar("x86HasFMA")                       // bool
 	ir.Syms.X86HasPOPCNT = typecheck.LookupRuntimeVar("x86HasPOPCNT")                 // bool
@@ -8052,6 +8054,10 @@ func (e *ssafn) Syslook(name string) *obj.LSym {
 		return ir.Syms.WBZero
 	case "wbMove":
 		return ir.Syms.WBMove
+	case "wbRegion":
+		return ir.Syms.WBRegion
+	case "wbRegionMove":
+		return ir.Syms.WBRegionMove
 	case "cgoCheckMemmove":
 		return ir.Syms.CgoCheckMemmove
 	case "cgoCheckPtrWrite":

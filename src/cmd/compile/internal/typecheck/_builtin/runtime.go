@@ -182,6 +182,8 @@ var writeBarrier struct {
 
 // *byte is really *runtime.Type
 func typedmemmove(typ *byte, dst *any, src *any)
+func wbRegion(dst *uintptr, src uintptr)
+func wbRegionMove(typ *byte, dst *any, src *any)
 func typedmemclr(typ *byte, dst *any)
 func typedslicecopy(typ *byte, dstPtr *any, dstLen int, srcPtr *any, srcLen int) int
 
