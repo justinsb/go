@@ -397,6 +397,13 @@ func readMetrics() map[string]float64 {
 func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	m := readMetrics()
 	st := region.ReadStats()
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err == nil {
+		// Process CPU time as the kernel accounts it. The runtime/metrics
+		// CPU classes are estimates derived from scheduler state and
+		// overstate busy time when the machine is oversubscribed.
+		m["rusage/cpu_s"] = float64(ru.Utime.Sec+ru.Stime.Sec) + float64(ru.Utime.Usec+ru.Stime.Usec)/1e6
+	}
 	m["region/regions"] = float64(st.Regions)
 	m["region/freed_regions"] = float64(st.FreedRegions)
 	m["region/freed_objects"] = float64(st.FreedObjects)
@@ -613,6 +620,8 @@ func runClient(base string) {
 		"cpu_gc_assist_s":     d("/cpu/classes/gc/mark/assist:cpu-seconds"),
 		"gc_cpu_frac":         d("/cpu/classes/gc/total:cpu-seconds") / (d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds")),
 		"cpu_ms_per_req":      1000 * (d("/cpu/classes/total:cpu-seconds") - d("/cpu/classes/idle:cpu-seconds")) / float64(*nReq),
+		"proc_cpu_s":          d("rusage/cpu_s"),
+		"proc_cpu_us_per_req": 1e6 * d("rusage/cpu_s") / float64(*nReq),
 		"heap_live_bytes":     after["/gc/heap/live:bytes"],
 		"heap_goal_bytes":     after["/gc/heap/goal:bytes"],
 		"peak_heap_bytes":     after["peak/heap_bytes"],
