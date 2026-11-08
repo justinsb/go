@@ -37,6 +37,7 @@ type DebugFlags struct {
 	EscapeDebug           int    `help:"print information about escape analysis and resulting optimizations" concurrent:"ok"`
 	EscapeAlias           int    `help:"print information about alias analysis" concurrent:"ok"`
 	EscapeAliasCheck      int    `help:"enable additional validation for alias analysis" concurrent:"ok"`
+	EscapeSink            int    `help:"print the sink kind that forced each heap allocation (see escape/sink.go)" concurrent:"ok"`
 	Export                int    `help:"print export data"`
 	FIPSHash              string `help:"hash value for FIPS debugging" concurrent:"ok"`
 	Fmahash               string `help:"hash value for use in debugging platform-dependent multiply-add use" concurrent:"ok"`

@@ -179,7 +179,7 @@ func (e *escape) exprSkipInit(k hole, n ir.Node) {
 		// we don't have to create this slice?
 		var ks []hole
 		for i := m.Type.NumResults(); i > 0; i-- {
-			ks = append(ks, e.heapHole())
+			ks = append(ks, e.heapHole().withSink(sinkMethValue))
 		}
 		name, _ := m.Nname.(*ir.Name)
 		paramK := e.tagHole(ks, name, m.Type.Recv())

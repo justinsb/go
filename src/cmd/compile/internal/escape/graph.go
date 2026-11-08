@@ -82,6 +82,17 @@ type location struct {
 	addrtaken  bool // has this variable's address been taken?
 	param      bool // is this variable a parameter (ONAME of class ir.PPARAM)?
 	paramOut   bool // is this variable an out parameter (ONAME of class ir.PPARAMOUT)?
+
+	// sink records why this location escaped, if it did (see sink.go).
+	// sinkMax is the most severe sink over all paths to the heap, computed
+	// by walkSinks when -d=escapesink is set; otherwise sinkNone.
+	sink    sinkKind
+	sinkMax sinkKind
+
+	// base and baseAssigns record what is known about the provenance
+	// of a local pointer variable (see noteBase in sink.go).
+	base        baseKind
+	baseAssigns uint8
 }
 
 type locAttr uint8
@@ -115,6 +126,7 @@ type edge struct {
 	src    *location
 	derefs int // >= -1
 	notes  *note
+	sink   sinkKind // kind of heap sink this edge represents, if dst is the heap
 }
 
 func (l *location) asHole() hole {
@@ -122,7 +134,7 @@ func (l *location) asHole() hole {
 }
 
 // leak records that parameter l leaks to sink.
-func (l *location) leakTo(sink *location, derefs int) {
+func (l *location) leakTo(sink *location, derefs int, kind sinkKind) {
 	// If sink is a result parameter that doesn't escape (#44614)
 	// and we can fit return bits into the escape analysis tag,
 	// then record as a result leak.
@@ -137,6 +149,7 @@ func (l *location) leakTo(sink *location, derefs int) {
 
 	// Otherwise, record as heap leak.
 	l.paramEsc.AddHeap(derefs)
+	l.paramEsc.setHeapSink(kind)
 }
 
 func (l *location) isName(c ir.Class) bool {
@@ -150,6 +163,7 @@ type hole struct {
 	dst    *location
 	derefs int // >= -1
 	notes  *note
+	sink   sinkKind // see sink.go
 
 	// addrtaken indicates whether this context is taking the address of
 	// the expression, independent of whether the address will actually
@@ -221,12 +235,25 @@ func (b *batch) flow(k hole, src *location) {
 			}
 
 		}
+		if src.sink == sinkNone {
+			if dst == &b.heapLoc {
+				src.sink = k.sink
+			} else {
+				src.sink = dst.sink
+			}
+			if src.sink == sinkNone {
+				src.sink = sinkOther
+			}
+		}
 		src.attrs |= attrEscapes | attrPersists | attrMutates | attrCalls
-		return
+		if base.Debug.EscapeSink == 0 {
+			return
+		}
+		// Keep the edge so that walkSinks can see every path to the heap.
 	}
 
 	// TODO(mdempsky): Deduplicate edges?
-	dst.edges = append(dst.edges, edge{src: src, derefs: k.derefs, notes: k.notes})
+	dst.edges = append(dst.edges, edge{src: src, derefs: k.derefs, notes: k.notes, sink: k.sink})
 }
 
 func (b *batch) heapHole() hole    { return b.heapLoc.asHole() }

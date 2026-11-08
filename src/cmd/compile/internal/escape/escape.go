@@ -89,6 +89,10 @@ import (
 // A batch holds escape analysis state that's shared across an entire
 // batch of functions being analyzed at once.
 type batch struct {
+	// walkgen is the most recent walk generation used by walkOne
+	// (see solve.go); later graph passes continue numbering from it.
+	walkgen uint32
+
 	allLocs         []*location
 	closures        []closure
 	reassignOracles map[*ir.Func]*ir.ReassignOracle
@@ -172,11 +176,14 @@ func Batch(fns []*ir.Func, reassignOracles map[*ir.Func]*ir.ReassignOracle) {
 		// Check if the node must be heap allocated for certain reasons
 		// such as OMAKESLICE for a large slice.
 		if why := HeapAllocReason(loc.n); why != "" {
-			b.flow(b.heapHole().addr(loc.n, why), loc)
+			b.flow(b.heapHole().withSink(sinkSize).addr(loc.n, why), loc)
 		}
 	}
 
 	b.walkAll()
+	if base.Debug.EscapeSink > 0 {
+		b.walkSinks()
+	}
 	b.finish(fns)
 }
 
@@ -314,6 +321,9 @@ func (b *batch) finish(fns []*ir.Func) {
 		goDeferWrapper := n.Op() == ir.OCLOSURE && n.(*ir.ClosureExpr).Func.Wrapper()
 
 		if loc.hasAttr(attrEscapes) {
+			if base.Debug.EscapeSink > 0 {
+				b.reportSink(loc)
+			}
 			if n.Op() == ir.ONAME {
 				if base.Flag.CompilingRuntime {
 					base.ErrorfAt(n.Pos(), 0, "%v escapes to heap, not allowed in runtime", n)
@@ -336,6 +346,13 @@ func (b *batch) finish(fns []*ir.Func) {
 			}
 			n.SetEsc(ir.EscHeap)
 		} else {
+			if base.Debug.EscapeSink > 0 && n.Op() != ir.ONAME && !goDeferWrapper {
+				// Non-escaping expressions may still allocate on the
+				// heap at run time (append growth, large or
+				// non-constant make, string concatenation, ...).
+				// Report them so that profiles can be joined.
+				b.reportSinkKind(loc, "noesc")
+			}
 			if base.Flag.LowerM != 0 && n.Op() != ir.ONAME && !goDeferWrapper {
 				if n.Op() == ir.OAPPEND {
 					base.WarnfAt(n.Pos(), "append does not escape")

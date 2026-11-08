@@ -56,12 +56,11 @@ func (b *batch) walkAll() {
 	b.calleeLoc.queuedWalkAll = true
 	b.heapLoc.queuedWalkAll = true
 
-	var walkgen uint32
 	for todo.len() > 0 {
 		root := todo.popFront()
 		root.queuedWalkAll = false
-		walkgen++
-		b.walkOne(root, walkgen, enqueue)
+		b.walkgen++
+		b.walkOne(root, b.walkgen, enqueue)
 	}
 }
 
@@ -124,6 +123,9 @@ func (b *batch) walkOne(root *location, walkgen uint32, enqueue func(*location))
 						logopt.LogOpt(l.n.Pos(), "escape", "escape", ir.FuncName(e_curfn), fmt.Sprintf("%v escapes to heap", l.n), explanation)
 					}
 				}
+				if !l.hasAttr(attrEscapes) && l.sink == sinkNone {
+					l.sink = b.classifySink(root, l)
+				}
 				newAttrs |= attrEscapes | attrPersists | attrMutates | attrCalls
 			} else
 			// If l's address flows to a persistent location, then l needs
@@ -155,7 +157,7 @@ func (b *batch) walkOne(root *location, walkgen uint32, enqueue func(*location))
 							fmt.Sprintf("parameter %v leaks to %s with derefs=%d", l.n, b.explainLoc(root), derefs), explanation)
 					}
 				}
-				l.leakTo(root, derefs)
+				l.leakTo(root, derefs, b.classifySink(root, l))
 			}
 			if root.hasAttr(attrMutates) {
 				l.paramEsc.AddMutator(derefs)

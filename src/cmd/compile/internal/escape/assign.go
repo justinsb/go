@@ -17,7 +17,7 @@ func (e *escape) addr(n ir.Node) hole {
 		return e.discardHole()
 	}
 
-	k := e.heapHole()
+	k := e.heapHole().withSink(sinkStore)
 
 	switch n.Op() {
 	default:
@@ -25,11 +25,12 @@ func (e *escape) addr(n ir.Node) hole {
 	case ir.ONAME:
 		n := n.(*ir.Name)
 		if n.Class == ir.PEXTERN {
+			k = k.withSink(sinkGlobal)
 			break
 		}
 		k = e.oldLoc(n).asHole()
 	case ir.OLINKSYMOFFSET:
-		break
+		k = k.withSink(sinkGlobal)
 	case ir.ODOT:
 		n := n.(*ir.SelectorExpr)
 		k = e.addr(n.X)
@@ -39,16 +40,20 @@ func (e *escape) addr(n ir.Node) hole {
 		if n.X.Type().IsArray() {
 			k = e.addr(n.X)
 		} else {
+			k = k.withSink(e.storeSink(n.X))
 			e.mutate(n.X)
 		}
 	case ir.ODEREF:
 		n := n.(*ir.StarExpr)
+		k = k.withSink(e.storeSink(n.X))
 		e.mutate(n.X)
 	case ir.ODOTPTR:
 		n := n.(*ir.SelectorExpr)
+		k = k.withSink(e.storeSink(n.X))
 		e.mutate(n.X)
 	case ir.OINDEXMAP:
 		n := n.(*ir.IndexExpr)
+		k = k.withSink(e.storeSink(n.X))
 		e.discard(n.X)
 		// Keys used in map assignments must escape.
 		// See "Hashing Pointers" doc in internal/runtime/maps/map.go.
@@ -56,6 +61,21 @@ func (e *escape) addr(n ir.Node) hole {
 	}
 
 	return k
+}
+
+// storeSink returns the sink kind for a store through the pointer
+// expression base.
+func (e *escape) storeSink(base ir.Node) sinkKind {
+	switch e.baseOf(base) {
+	case baseParam:
+		return sinkStoreParam
+	case baseLocal:
+		return sinkStoreLocal
+	case baseGlobal:
+		// The pointee (or map, or slice) is reachable from a global.
+		return sinkGlobal
+	}
+	return sinkStore
 }
 
 func (e *escape) mutate(n ir.Node) {
@@ -71,7 +91,7 @@ func (e *escape) addrs(l ir.Nodes) []hole {
 }
 
 func (e *escape) assignHeap(src ir.Node, why string, where ir.Node) {
-	e.expr(e.heapHole().note(where, why), src)
+	e.expr(e.heapHole().withSink(sinkForWhy(why)).note(where, why), src)
 }
 
 // assignList evaluates the assignment dsts... = srcs....
@@ -84,10 +104,14 @@ func (e *escape) assignList(dsts, srcs []ir.Node, why string, where ir.Node) {
 		}
 
 		if dst := dsts[i]; dst != nil {
+			if name, ok := dst.(*ir.Name); ok && dst.Op() == ir.ONAME {
+				e.noteBase(name, src)
+			}
+
 			// Detect implicit conversion of uintptr to unsafe.Pointer when
 			// storing into reflect.{Slice,String}Header.
 			if dst.Op() == ir.ODOTPTR && ir.IsReflectHeaderDataField(dst) {
-				e.unsafeValue(e.heapHole().note(where, why), src)
+				e.unsafeValue(e.heapHole().withSink(sinkUnsafe).note(where, why), src)
 				continue
 			}
 

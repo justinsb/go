@@ -1,0 +1,27 @@
+alloc_bytes            2.879183776e+09
+alloc_bytes_per_req    14395.91888
+alloc_objects          3.3695744e+07
+ballast_mb             0
+cache_entries          1983
+concurrency            64
+cpu_gc_assist_s        2.091737799
+cpu_gc_dedicated_s     1.240299751
+cpu_gc_idle_s          0.0010764680000000001
+cpu_gc_s               3.899235242
+cpu_total_s            22.869432932
+cpu_user_s             18.69374823
+customers              201
+elapsed_s              5.7204860889999996
+gc_cpu_frac            0.17049986563261063
+gc_cpu_frac_nonidle    0.17046081908582236
+gc_cycles              914
+goexperiment           
+gogc                   
+gomaxprocs             4
+heap_goal_bytes        1.1449818e+07
+heap_live_bytes        5.477712e+06
+label                  baseline-prof
+peak_heap_bytes        1.0097192e+07
+peak_total_bytes       2.6929432e+07
+req_per_s              34962.063868065816
+requests               200000

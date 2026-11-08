@@ -1,0 +1,76 @@
+escsink sites parsed: 18892 (9055 distinct file:line)
+profile records: 373 (0 with stacks truncated at 32 frames); total alloc 2736.7 MiB / 33762760 objects; included (client side): 968.4 MiB (35.4%) / 11982822 objects
+
+sink                  MiB  bytes%    objects   objs%   bucket
+go                  186.9   19.3%    2196893   18.3%   A. cross-goroutine (definitely shared)
+send                 15.6    1.6%     204924    1.7%   A. cross-goroutine (definitely shared)
+global                0.2    0.0%       1537    0.0%   A. cross-goroutine (definitely shared)
+result              166.3   17.2%    1709402   14.3%   B. goroutine-local by construction
+store-local          52.0    5.4%     578585    4.8%   B. goroutine-local by construction
+store-param           9.6    1.0%     210338    1.8%   B. goroutine-local by construction
+store               197.1   20.4%    2744349   22.9%   C. provenance unknown statically
+dyncall              67.2    6.9%    2168443   18.1%   C. provenance unknown statically
+call                  1.2    0.1%       6151    0.1%   C. provenance unknown statically
+~reflect              0.1    0.0%       4096    0.0%   D. no static site: allocated via reflect
+~runtime-chan       141.5   14.6%    1764942   14.7%   D. no static site: runtime-internal (chan)
+~runtime-map        130.0   13.4%     387306    3.2%   D. no static site: runtime-internal (map)
+~nosite               0.6    0.1%       5856    0.0%   D. no static site: unattributed
+
+bucket                                                                MiB  bytes%   objs%
+A. cross-goroutine (definitely shared)                              202.8   20.9%   20.1%
+B. goroutine-local by construction                                  228.0   23.5%   20.8%
+C. provenance unknown statically                                    265.5   27.4%   41.0%
+D. no static site: allocated via reflect                              0.1    0.0%    0.0%
+D. no static site: runtime-internal (chan)                          141.5   14.6%   14.7%
+D. no static site: runtime-internal (map)                           130.0   13.4%    3.2%
+D. no static site: unattributed                                       0.6    0.1%    0.0%
+
+(494 profile records hit a line with several sites of different kinds; the most severe kind was used)
+
+top 45 allocation sites (client side):
+    MiB  bytes%  sink         site
+  136.5   14.1%  store        net/textproto.MIMEHeader.Set net/textproto/header.go:22
+   66.2    6.8%  ~runtime-map net/textproto.readMIMEHeader net/textproto/reader.go:601
+   63.7    6.6%  ~runtime-map net/http.Header.Clone net/http/header.go:114
+   60.4    6.2%  go           net/http.setupRewindBody net/http/transport.go:813
+   60.0    6.2%  result       net/http.NewRequestWithContext net/http/request.go:922
+   41.9    4.3%  result       io.init.func1 io/io.go:657
+   33.4    3.4%  go           net/http.(*Transport).getConn net/http/transport.go:1598
+   32.9    3.4%  go           net/http.newTransferWriter net/http/transfer.go:80
+   29.8    3.1%  go           context.withCancel context/context.go:278
+   29.4    3.0%  store-local  net/http.ReadResponse net/http/response.go:160
+   29.1    3.0%  ~runtime-chan net/http.(*Transport).getConn net/http/transport.go:1603
+   28.5    2.9%  dyncall      net/url.(*URL).Clone net/url/url.go:1348
+   28.1    2.9%  result       net/url.parse net/url/url.go:443
+   23.9    2.5%  ~runtime-chan net/http.(*persistConn).roundTrip net/http/transport.go:3062
+   23.0    2.4%  ~runtime-chan net/http.(*persistConn).readLoop net/http/transport.go:2577
+   22.1    2.3%  ~runtime-chan context.(*cancelCtx).Done context/context.go:458
+   21.8    2.2%  ~runtime-chan net/http.(*persistConn).roundTrip net/http/transport.go:3053
+   21.6    2.2%  ~runtime-chan net/http.(*persistConn).roundTrip net/http/transport.go:3065
+   15.6    1.6%  send         net/http.(*Transport).roundTrip net/http/transport.go:703
+   14.3    1.5%  store-local  net/http.readTransfer net/http/transfer.go:581
+   13.6    1.4%  store        net/textproto.readMIMEHeader net/textproto/reader.go:579
+   12.4    1.3%  store        net/http.(*persistConn).readLoop net/http/transport.go:2578
+   11.3    1.2%  store        net/textproto.readMIMEHeader net/textproto/reader.go:537
+    9.6    1.0%  dyncall      bytes.NewReader bytes/reader.go:159
+    9.6    1.0%  store-param  net/http.(*transportRequest).extraHeaders net/http/transport.go:548
+    9.6    1.0%  result       net/textproto.readMIMEHeader net/textproto/reader.go:540
+    9.6    1.0%  result       net/http.NewRequestWithContext net/http/request.go:929
+    9.3    1.0%  go           net/http.Header.Clone net/http/header.go:105
+    9.1    0.9%  store        container/list.(*List).insertValue container/list/list.go:104
+    8.8    0.9%  dyncall      io.LimitReader io/io.go:461
+    8.1    0.8%  store-local  net/http.NewRequestWithContext net/http/request.go:945
+    6.4    0.7%  result       net/http.(*Client).makeHeadersCopier net/http/client.go:786
+    5.9    0.6%  store        net/http.(*Transport).prepareTransportCancel net/http/transport.go:997
+    5.8    0.6%  dyncall      net/http.(*Request).write net/http/request.go:683
+    5.5    0.6%  go           net/http.(*persistConn).readLoop net/http/transport.go:2585
+    5.1    0.5%  go           net/http.setupRewindBody net/http/transport.go:814
+    4.8    0.5%  go           net/http.(*persistConn).readLoop net/http/transport.go:2580
+    3.8    0.4%  result       context.WithCancelCause context/context.go:271
+    3.8    0.4%  result       context.WithCancel context/context.go:243
+    3.4    0.3%  dyncall      net/textproto.(*Reader).ReadLine net/textproto/reader.go:45
+    3.4    0.3%  store        io.NopCloser io/io.go:684
+    3.4    0.3%  store        net/http.Header.Clone net/http/header.go:104
+    3.2    0.3%  dyncall      net/http.(*Request).write net/http/request.go:689
+    3.1    0.3%  dyncall      net/http.(*Request).write net/http/request.go:706
+    2.9    0.3%  go           context.WithoutCancel context/context.go:590

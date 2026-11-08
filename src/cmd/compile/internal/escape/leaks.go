@@ -13,7 +13,7 @@ import (
 // A leaks represents a set of assignment flows from a parameter to
 // the heap, mutator, callee, or to any of its function's (first
 // numEscResults) result parameters.
-type leaks [8]uint8
+type leaks [9]uint8
 
 const (
 	leakHeap = iota
@@ -22,7 +22,11 @@ const (
 	leakResult0
 )
 
-const numEscResults = len(leaks{}) - leakResult0
+const numEscResults = 5
+
+// leakSink is the index of the byte recording the sinkKind of the
+// heap leak (see sink.go); it is not a deref count.
+const leakSink = leakResult0 + numEscResults
 
 // Heap returns the minimum deref count of any assignment flow from l
 // to the heap. If no such flows exist, Heap returns -1.
@@ -45,6 +49,18 @@ func (l leaks) Result(i int) int { return l.get(leakResult0 + i) }
 
 // AddHeap adds an assignment flow from l to the heap.
 func (l *leaks) AddHeap(derefs int) { l.add(leakHeap, derefs) }
+
+// HeapSink returns the most severe sink kind recorded for l's heap
+// flows, or sinkNone if none was recorded.
+func (l leaks) HeapSink() sinkKind { return sinkKind(l[leakSink]) }
+
+// setHeapSink records the sink kind of a heap flow, keeping the most
+// severe kind seen so far.
+func (l *leaks) setHeapSink(k sinkKind) {
+	if uint8(k) > l[leakSink] {
+		l[leakSink] = uint8(k)
+	}
+}
 
 // AddMutator adds a flow from l to the mutator (i.e., a pointer
 // operand of an indirect assignment statement).
@@ -84,7 +100,7 @@ func (l *leaks) Optimize() {
 	// If we have a path to the heap, then there's no use in
 	// keeping equal or longer paths elsewhere.
 	if x := l.Heap(); x >= 0 {
-		for i := 1; i < len(*l); i++ {
+		for i := 1; i < leakSink; i++ {
 			if l.get(i) >= x {
 				l.set(i, -1)
 			}
@@ -96,7 +112,7 @@ var leakTagCache = map[leaks]string{}
 
 // Encode converts l into a binary string for export data.
 func (l leaks) Encode() string {
-	if l.Heap() == 0 {
+	if l.Heap() == 0 && l[leakSink] == 0 {
 		// Space optimization: empty string encodes more
 		// efficiently in export data.
 		return ""

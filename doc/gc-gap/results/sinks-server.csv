@@ -1,0 +1,14 @@
+side,kind,bucket,bytes,bytes_pct,objects,objects_pct
+server,send,"A. cross-goroutine (definitely shared)",111030671,5.99,955554,4.39
+server,go,"A. cross-goroutine (definitely shared)",24654385,1.33,383026,1.76
+server,global,"A. cross-goroutine (definitely shared)",24140807,1.30,188599,0.87
+server,store-param,"B. goroutine-local by construction",337542375,18.22,2907766,13.36
+server,result,"B. goroutine-local by construction",155847297,8.41,3762309,17.28
+server,store-local,"B. goroutine-local by construction",146621512,7.92,607057,2.79
+server,store,"C. provenance unknown statically",199981761,10.80,3002231,13.79
+server,dyncall,"C. provenance unknown statically",70784741,3.82,2990839,13.74
+server,call,"C. provenance unknown statically",3617408,0.20,13247,0.06
+server,map-key,"C. provenance unknown statically",65544,0.00,4096,0.02
+server,~reflect,"D. no static site: allocated via reflect",517139508,27.92,5457663,25.07
+server,~runtime-map,"D. no static site: runtime-internal (map)",244201595,13.18,871167,4.00
+server,~nosite,"D. no static site: unattributed",16781728,0.91,628174,2.89

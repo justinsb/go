@@ -153,19 +153,19 @@ func (e *escape) call(ks []hole, call ir.Node) {
 		// might flow to heap.
 		appendeeK := e.teeHole(ks[0], e.mutatorHole())
 		if args[0].Type().Elem().HasPointers() {
-			appendeeK = e.teeHole(appendeeK, e.heapHole().deref(call, "appendee slice"))
+			appendeeK = e.teeHole(appendeeK, e.heapHole().withSink(sinkStore).deref(call, "appendee slice"))
 		}
 		argument(appendeeK, args[0])
 
 		if call.IsDDD {
 			appendedK := e.discardHole()
 			if args[1].Type().IsSlice() && args[1].Type().Elem().HasPointers() {
-				appendedK = e.heapHole().deref(call, "appended slice...")
+				appendedK = e.heapHole().withSink(sinkStore).deref(call, "appended slice...")
 			}
 			argument(appendedK, args[1])
 		} else {
 			for i := 1; i < len(args); i++ {
-				argument(e.heapHole(), args[i])
+				argument(e.heapHole().withSink(sinkStore), args[i])
 			}
 		}
 		e.discard(call.RType)
@@ -184,14 +184,14 @@ func (e *escape) call(ks []hole, call ir.Node) {
 
 		copiedK := e.discardHole()
 		if call.Y.Type().IsSlice() && call.Y.Type().Elem().HasPointers() {
-			copiedK = e.heapHole().deref(call, "copied slice")
+			copiedK = e.heapHole().withSink(sinkStore).deref(call, "copied slice")
 		}
 		argument(copiedK, call.Y)
 		e.discard(call.RType)
 
 	case ir.OPANIC:
 		call := call.(*ir.UnaryExpr)
-		argument(e.heapHole(), call.X)
+		argument(e.heapHole().withSink(sinkPanic), call.X)
 
 	case ir.OCOMPLEX:
 		call := call.(*ir.BinaryExpr)
@@ -236,7 +236,10 @@ func (e *escape) call(ks []hole, call ir.Node) {
 
 // goDeferStmt analyzes a "go" or "defer" statement.
 func (e *escape) goDeferStmt(n *ir.GoDeferStmt) {
-	k := e.heapHole()
+	k := e.heapHole().withSink(sinkGo)
+	if n.Op() == ir.ODEFER {
+		k = k.withSink(sinkDefer)
+	}
 	if n.Op() == ir.ODEFER && e.loopDepth == 1 && n.DeferAt == nil {
 		// Top-level defer arguments don't escape to the heap,
 		// but they do need to last until they're invoked.
@@ -308,7 +311,7 @@ func (e *escape) rewriteArgument(arg ir.Node, call *ir.CallExpr, fns []*ir.Name)
 
 		k := e.mutatorHole()
 		if pragma&ir.UintptrEscapes != 0 {
-			k = e.heapHole().note(conv, "//go:uintptrescapes")
+			k = e.heapHole().withSink(sinkUnsafe).note(conv, "//go:uintptrescapes")
 		}
 		e.flow(k, e.oldLoc(tmp))
 
@@ -366,7 +369,7 @@ func (e *escape) copyExpr(pos src.XPos, expr ir.Node, init *ir.Nodes) *ir.Name {
 
 func (e *escape) mergedTagHole(ks []hole, fns []*ir.Name, paramIdx int, nParams int) hole {
 	if len(fns) == 0 {
-		return e.heapHole()
+		return e.heapHole().withSink(sinkDynCall)
 	}
 	holes := make([]hole, 0, len(fns))
 	for _, f := range fns {
@@ -390,7 +393,7 @@ func (e *escape) mergedTagHole(ks []hole, fns []*ir.Name, paramIdx int, nParams 
 func (e *escape) tagHole(ks []hole, fn *ir.Name, param *types.Field) hole {
 	// If this is a dynamic call, we can't rely on param.Note.
 	if fn == nil {
-		return e.heapHole()
+		return e.heapHole().withSink(sinkDynCall)
 	}
 
 	if e.inMutualBatch(fn) {
@@ -406,7 +409,11 @@ func (e *escape) tagHole(ks []hole, fn *ir.Name, param *types.Field) hole {
 	esc := parseLeaks(param.Note)
 
 	if x := esc.Heap(); x >= 0 {
-		tagKs = append(tagKs, e.heapHole().shift(x))
+		kind := esc.HeapSink()
+		if kind == sinkNone {
+			kind = sinkCall
+		}
+		tagKs = append(tagKs, e.heapHole().shift(x).withSink(kind))
 	}
 	if x := esc.Mutator(); x >= 0 {
 		tagKs = append(tagKs, e.mutatorHole().shift(x))

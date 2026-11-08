@@ -1,0 +1,77 @@
+escsink sites parsed: 18892 (9055 distinct file:line)
+profile records: 373 (0 with stacks truncated at 32 frames); total alloc 2736.7 MiB / 33762760 objects; included (all side): 2736.7 MiB (100.0%) / 33762760 objects
+
+sink                  MiB  bytes%    objects   objs%   bucket
+go                  210.5    7.7%    2579919    7.6%   A. cross-goroutine (definitely shared)
+send                121.5    4.4%    1160478    3.4%   A. cross-goroutine (definitely shared)
+global               23.2    0.8%     190136    0.6%   A. cross-goroutine (definitely shared)
+store-param         331.5   12.1%    3118104    9.2%   B. goroutine-local by construction
+result              314.9   11.5%    5471711   16.2%   B. goroutine-local by construction
+store-local         191.9    7.0%    1185642    3.5%   B. goroutine-local by construction
+store               387.8   14.2%    5746580   17.0%   C. provenance unknown statically
+dyncall             134.7    4.9%    5163378   15.3%   C. provenance unknown statically
+call                  5.2    0.2%      20426    0.1%   C. provenance unknown statically
+map-key               0.1    0.0%       4096    0.0%   C. provenance unknown statically
+~reflect            493.2   18.0%    5461759   16.2%   D. no static site: allocated via reflect
+~runtime-chan       141.5    5.2%    1764942    5.2%   D. no static site: runtime-internal (chan)
+~runtime-map        363.6   13.3%    1260998    3.7%   D. no static site: runtime-internal (map)
+~nosite              16.9    0.6%     634591    1.9%   D. no static site: unattributed
+
+bucket                                                                MiB  bytes%   objs%
+A. cross-goroutine (definitely shared)                              355.2   13.0%   11.6%
+B. goroutine-local by construction                                  838.3   30.6%   29.0%
+C. provenance unknown statically                                    527.9   19.3%   32.4%
+D. no static site: allocated via reflect                            493.2   18.0%   16.2%
+D. no static site: runtime-internal (chan)                          141.5    5.2%    5.2%
+D. no static site: runtime-internal (map)                           363.6   13.3%    3.7%
+D. no static site: unattributed                                      16.9    0.6%    1.9%
+
+(868 profile records hit a line with several sites of different kinds; the most severe kind was used)
+
+top 45 allocation sites (all side):
+    MiB  bytes%  sink         site
+  279.3   10.2%  store-param  encoding/json/jsontext.(*decoderState).fetch encoding/json/jsontext/decode.go:227
+  239.1    8.7%  ~reflect     encoding/json/v2.makeMapArshaler.func3 encoding/json/v2/arshal_default.go:1063
+  207.3    7.6%  store        net/textproto.MIMEHeader.Set net/textproto/header.go:22
+  171.5    6.3%  ~reflect     encoding/json/v2.makeSliceArshaler.func3 encoding/json/v2/arshal_default.go:1579
+  133.5    4.9%  ~runtime-map net/textproto.readMIMEHeader net/textproto/reader.go:601
+  132.0    4.8%  ~runtime-map net/http.Header.Clone net/http/header.go:114
+   82.6    3.0%  send         main.handleOrder workload/main.go:182
+   63.3    2.3%  store-local  net/http.readRequestLimit net/http/request.go:1102
+   61.8    2.3%  result       io.init.func1 io/io.go:657
+   60.6    2.2%  store-local  encoding/json/jsontext.NewDecoder encoding/json/jsontext/decode.go:123
+   60.4    2.2%  go           net/http.setupRewindBody net/http/transport.go:813
+   60.0    2.2%  result       net/http.NewRequestWithContext net/http/request.go:922
+   54.6    2.0%  result       net/url.parse net/url/url.go:443
+   53.5    2.0%  ~runtime-map main.handleOrder workload/main.go:211
+   45.2    1.7%  store        net/http.(*conn).readRequest net/http/server.go:1105
+   44.8    1.6%  go           context.withCancel context/context.go:278
+   43.6    1.6%  ~runtime-map main.handleOrder workload/main.go:188
+   41.6    1.5%  result       fmt.Sprintf fmt/print.go:232
+   41.5    1.5%  ~reflect     encoding/json/v2.makeMapArshaler.func3 encoding/json/v2/arshal_default.go:984
+   36.8    1.3%  dyncall      main.handleOrder workload/main.go:189
+   33.4    1.2%  go           net/http.(*Transport).getConn net/http/transport.go:1598
+   32.9    1.2%  go           net/http.newTransferWriter net/http/transfer.go:80
+   32.3    1.2%  ~reflect     encoding/json/v2.newAddressableValue encoding/json/v2/arshal.go:504
+   29.6    1.1%  store-local  net/http.readTransfer net/http/transfer.go:581
+   29.4    1.1%  store-local  net/http.ReadResponse net/http/response.go:160
+   29.1    1.1%  ~runtime-chan net/http.(*Transport).getConn net/http/transport.go:1603
+   28.5    1.0%  dyncall      net/url.(*URL).Clone net/url/url.go:1348
+   27.5    1.0%  store        net/textproto.readMIMEHeader net/textproto/reader.go:537
+   27.1    1.0%  store-param  encoding/json/v2.makeString encoding/json/v2/intern.go:52
+   26.3    1.0%  store        main.handleOrder workload/main.go:191
+   24.1    0.9%  store        net/textproto.readMIMEHeader net/textproto/reader.go:579
+   23.9    0.9%  ~runtime-chan net/http.(*persistConn).roundTrip net/http/transport.go:3062
+   23.0    0.8%  ~runtime-chan net/http.(*persistConn).readLoop net/http/transport.go:2577
+   23.0    0.8%  global       main.handleOrder workload/main.go:178
+   22.1    0.8%  ~runtime-chan context.(*cancelCtx).Done context/context.go:458
+   21.8    0.8%  ~runtime-chan net/http.(*persistConn).roundTrip net/http/transport.go:3053
+   21.6    0.8%  ~runtime-chan net/http.(*persistConn).roundTrip net/http/transport.go:3065
+   19.1    0.7%  dyncall      main.handleOrder workload/main.go:170
+   18.8    0.7%  result       net/textproto.readMIMEHeader net/textproto/reader.go:540
+   17.9    0.7%  go           net/http.Header.Clone net/http/header.go:105
+   15.6    0.6%  send         net/http.(*Transport).roundTrip net/http/transport.go:703
+   14.9    0.5%  result       net.(*conn).Read net/net.go:198
+   12.8    0.5%  dyncall      io.LimitReader io/io.go:461
+   12.4    0.5%  store        net/http.(*persistConn).readLoop net/http/transport.go:2578
+   11.9    0.4%  store-param  encoding/json/jsontext.(*decoderState).fetch encoding/json/jsontext/decode.go:206
