@@ -171,6 +171,9 @@ func InitConfig() {
 	ir.Syms.WBMove = typecheck.LookupRuntimeFunc("wbMove")
 	ir.Syms.WBRegion = typecheck.LookupRuntimeFunc("wbRegion")
 	ir.Syms.WBRegionMove = typecheck.LookupRuntimeFunc("wbRegionMove")
+	for i := range ir.Syms.RegionParamsLocal {
+		ir.Syms.RegionParamsLocal[i] = typecheck.LookupRuntimeFunc("regionParamsLocal" + string(rune('1'+i)))
+	}
 	ir.Syms.X86HasAVX = typecheck.LookupRuntimeVar("x86HasAVX")                       // bool
 	ir.Syms.X86HasFMA = typecheck.LookupRuntimeVar("x86HasFMA")                       // bool
 	ir.Syms.X86HasPOPCNT = typecheck.LookupRuntimeVar("x86HasPOPCNT")                 // bool
@@ -7131,7 +7134,7 @@ func genssa(f *ssa.Func, pp *objw.Progs) {
 			case ssa.OpGetG:
 				// nothing to do when there's a g register,
 				// and checkLower complains if there's not
-			case ssa.OpVarDef, ssa.OpVarLive, ssa.OpKeepAlive, ssa.OpWBend:
+			case ssa.OpVarDef, ssa.OpVarLive, ssa.OpKeepAlive, ssa.OpWBend, ssa.OpRegionAllocEnd:
 				// nothing to do; already used by liveness
 			case ssa.OpPhi:
 				CheckLoweredPhi(v)
@@ -8060,6 +8063,8 @@ func (e *ssafn) Syslook(name string) *obj.LSym {
 		return ir.Syms.WBRegion
 	case "wbRegionMove":
 		return ir.Syms.WBRegionMove
+	case "regionParamsLocal1", "regionParamsLocal2", "regionParamsLocal3", "regionParamsLocal4":
+		return ir.Syms.RegionParamsLocal[name[len(name)-1]-'1']
 	case "cgoCheckMemmove":
 		return ir.Syms.CgoCheckMemmove
 	case "cgoCheckPtrWrite":

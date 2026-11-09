@@ -184,6 +184,10 @@ var writeBarrier struct {
 func typedmemmove(typ *byte, dst *any, src *any)
 func wbRegion(dst *uintptr, src uintptr)
 func wbRegionMove(typ *byte, dst *any, src *any)
+func regionParamsLocal1(p0 unsafe.Pointer) uintptr
+func regionParamsLocal2(p0, p1 unsafe.Pointer) uintptr
+func regionParamsLocal3(p0, p1, p2 unsafe.Pointer) uintptr
+func regionParamsLocal4(p0, p1, p2, p3 unsafe.Pointer) uintptr
 func typedmemclr(typ *byte, dst *any)
 func typedslicecopy(typ *byte, dstPtr *any, dstLen int, srcPtr *any, srcLen int) int
 

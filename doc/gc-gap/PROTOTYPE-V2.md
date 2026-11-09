@@ -239,16 +239,159 @@ caller when it can prove it and entered from the general body when
 `g.region == nil` or an entry check passes. The freshness-across-calls
 step is its caller-side half.
 
+## Fourth round: inline allocation and parameter locality
+
+The third round left allocation (9.5% of CPU, against 7% for the
+baseline's allocator) and the store check (5.4%) as the two largest
+region-specific costs. This round attacks both in the compiler, with two
+runtime changes that make the compiler's job simple.
+
+**Inline allocation.** A late SSA pass (`cmd/compile/internal/ssa/regionalloc.go`,
+after the write barrier pass and before lowering) expands every call to
+the runtime allocator for an object of at most 16 KB with at most 64
+pointer words into a bump allocation in the goroutine's region, with the
+call as the fallback:
+
+```
+if g.region != nil && r.cursor+size <= r.fastLimit {   // r = g.region
+    x = r.cursor; r.cursor += size
+    set x's start bit (and pointer bits) in the block header
+} else {
+    x = newobject(T)
+}
+```
+
+The header address is the cursor rounded down to the 64 KB block; the
+bitmap word and bit come from the cursor's low bits with masked shifts,
+so the fast path is a load, a compare, a store, two or three read-or-write
+updates of header words, and no branches past the limit check. It does
+not zero the object: the runtime activates and zeroes each line run in
+4 KB chunks ahead of the cursor (activating a whole run when it is
+claimed, the first attempt, quadrupled the lines a request touched and
+the cost of freeing them), and `fastLimit` is the zeroed frontier, or zero
+whenever the slow path must be taken (no region, allocations placed
+outside the region by `region.Ignore`, or a GC cycle marking, when objects
+must be allocated black). The sequence from the limit check to the end
+is a preemption-unsafe point, like a write barrier: a cycle that started
+in between would not see the object as allocated black. Expanding late
+means every earlier optimization still sees an ordinary allocation call:
+zeroing stores into the new object are removed, nil checks on it are
+dropped, and the write barrier pass still recognizes it as fresh. The
+`regioncheck` verifier covers the inline path too; inline allocations
+leave no size record, so the overlap self-check skips objects without one.
+
+**Lazy fade propagation.** A store of a region pointer into a region
+object that has already escaped (faded) used to fade the stored object at
+once, transitively, which is why the store check had to look at the
+faded state of both lines. Now the pointers held by faded objects are
+followed at region exit (`propagateFades`, before the exit verifier),
+and a store into *any* live object of the current region needs no check
+at all. The collector is unaffected: a faded object that is reachable
+from outside is marked and scanned by the GC like any other, so the
+objects it points to are kept alive whether or not they have faded yet.
+The store check's fast path is now: pointer in a region block, slot in a
+block owned by this region, slot's line active.
+
+**Parameter locality (the versioning experiment).** With that rule, a
+store into the object a pointer parameter points to needs no check if the
+parameter pointed into a live object of the current region at entry: the
+object stays one for the rest of the call, however it is published. The
+write barrier pass now picks, per function, up to four pointer parameters
+whose objects the function stores pointers into, and starts the function
+with
+
+```
+flags = 0
+if g.region != nil { flags = regionParamsLocalN(p1, ..., pN) }
+```
+
+(a runtime call, only when the goroutine is in a region: a range test,
+the block owner and the line state per parameter). Each store check on a
+store into parameter `i`'s object becomes conditional on bit `i` of
+`flags`. This is the dynamic, single-body form of the "fast variant"
+discussed earlier: instead of a second body entered through a tail call,
+the general body carries the entry check and skips the per-store calls
+when it passes. The freshness proof for objects allocated in the function
+is the static form of the same rule and no longer needs to track
+publication through stores and calls. Both can be switched off with
+`-d=regionalloc=0` and `-d=regionparams=0`.
+
+**The accounting bug.** The repeated `clobberfree` runs of the region tests
+hung in the pacer: `memoryLimitHeapGoal` spins until allocated plus free
+heap bytes fit in mapped memory, and the region sweep only credited freed
+pinned lines to the pacer when one of them held an object start, so lines
+belonging to the tail of a multi-line object or of an abandoned run were
+counted as allocated forever. The sweep now credits every freed line; the
+pacer loop reports its counters and throws after 2^28 spins instead of
+stalling the world; and under `regioncheck` the region's contribution to
+the pacer is checked against the line states at every exit and sweep.
+
+**The finalizer bug.** The `regioncheck` run of the `net/http` tests then
+caught a dangling pointer: a closed `os.File` (a region object kept alive
+by its finalizer) pointing to its name string, which the collector had
+freed. Region blocks live in arenas of their own, and the mark phase's
+scan of finalizer, cleanup and weak-handle specials walked the heap
+arenas only, so a finalizer on a region object was not a root: the sweep
+revived the object, as the heap sweep does, but nothing had marked what
+it referenced. The span-root scan now covers the region arenas too, and
+`TestFinalizerReferents` reproduces the case.
+
+**Results** (`restwork/run4.sh`; three compilers: everything on, the
+parameter check off, both off; GOGC=100 rows are four runs each
+(`results/restwork-v4-gogc100-summary.csv`), ballast rows two
+(`results/restwork-v4-summary.csv`); the machine ran about 2 us/req
+slower than for the third round's table, compare rows within this one):
+
+| config | req/s | CPU us/req | GC CPU % | GC cycles | live MiB | peak heap MiB | abandoned % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| base, GOGC=100 | 49067 | 35.6 | 4.1 | 42 | 44.4 | 85.7 | |
+| region, GOGC=100, both | 46022 | 40.0 | 1.0 | 9 | 43.9 | 80.4 | 0.5 |
+| region, GOGC=100, inline allocation only | 46318 | 39.5 | 0.9 | 9 | 47.7 | 86.3 | 0.6 |
+| region, GOGC=100, neither | 45862 | 40.3 | 1.1 | 9 | 45.7 | 84.4 | 0.6 |
+| base, GOGC=100, 256 MiB ballast | 49144 | 38.6 | 14.6 | 7 | 255.5 | 466.5 | |
+| region, ballast, both | 47994 | 40.3 | 5.6 | 3 | 270.5 | 382.6 | 0.9 |
+| region, ballast, inline allocation only | 46825 | 40.7 | 4.8 | 3 | 266.1 | 377.7 | 0.8 |
+| region, ballast, neither | 45924 | 41.9 | 5.5 | 3 | 268.0 | 378.5 | 0.9 |
+
+(The three base rows of each group differ by up to 2 us/req between
+compilers although the base server never enters a region; that is the
+noise level of these numbers. The table shows one base row per group.)
+
+The gap at GOGC=100 is 4.4 us of CPU per request (12%) and 6% of
+throughput, from 6.2 us (19%) and 8% after the third round. Most of that
+came from the two runtime changes, which the "neither" compiler also
+has: lazy fade propagation (the store check no longer reads the faded
+state of two lines, and stores into faded objects no longer fade
+transitively at store time) and an inline-style fast path inside the
+runtime allocator for the sites the compiler does not expand (slices,
+strings, maps). Inline allocation in compiled code is worth about 0.8
+us (2%): the profile shows the allocation sites that remain on the slow
+path are `makeslice` (29%), `growslice` (27%) and `newarray`, not
+`new(T)`. The parameter check does not pay for itself: it removes about
+a third of the `wbRegion` calls (3.3% of CPU, from 5.4%) and costs 1.1%
+in `regionParamsLocalN`, which is called once per invocation of hot small
+methods (`bufio.Writer.Write`, `jsontext` state methods, `response.Header`)
+whose stores into the receiver are rare or few. A static cost model
+cannot tell those apart; the check belongs in a profile-guided or
+caller-chosen variant, which is the versioning design proper.
+
+The profile (`results/restwork-prof-v4-on.txt`) now attributes: region
+exit 7.8% (freeing lines 4.4%, scanning the outer stack 1.8%),
+allocation 6.1% (the baseline's allocator is 7%), store check 3.3%,
+entry check 1.1%, typed-copy checks 1.1%.
+
 ## What is still open
 
 - The remaining escapes (six per thousand requests) are runtime-internal
   transients (`gopark` recording the lock a goroutine waits on) and the
   rare non-standard request method. None is a correctness problem; each
   costs a pinned line until the next GC.
-- The store check costs about 40 slow-path calls per request after the
-  third round; the fast path is a range test, an xor and three header
-  loads. Function versioning would remove the remaining checks on stores
-  into parameters.
+- The store check is 3.3% of CPU after the fourth round; the fast path
+  is a range test, a header load and a line state. Removing it where a
+  parameter is known local needs a cheaper or better-targeted entry
+  check than the dynamic one tried here.
+- Inline allocation covers `new(T)`; `make([]T, n)` and `append` still
+  call the runtime, where a fast path of the same shape costs a call.
 - The exit cost is dominated by freeing lines (clearing the pointer bits
   of their objects) and pinning faded ones; it runs after the response is
   written.
@@ -265,6 +408,8 @@ step is its caller-side half.
 cd doc/gc-gap
 ./restwork/run.sh results/restwork.jsonl 300000 64   # 16 configurations
 python3 restwork/summarize.py results/restwork.jsonl
+./restwork/run4.sh results/restwork-v4.jsonl 300000 64  # fourth round: three compilers
+python3 restwork/summarize.py results/restwork-v4.jsonl
 # fade profile
 GODEBUG=httpregion=1,regiontrace=1 /tmp/restwork-bin -serve 127.0.0.1:8080 -items 20000 -cache 5000 2> fades.txt &
 /tmp/restwork-bin -client http://127.0.0.1:8080 -items 20000 -cache 5000 -n 300000 -c 64

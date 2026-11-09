@@ -1046,12 +1046,18 @@ func (c *gcControllerState) heapGoalInternal() (goal, minTrigger uint64) {
 func (c *gcControllerState) memoryLimitHeapGoal() uint64 {
 	// Start by pulling out some values we'll need. Be careful about overflow.
 	var heapFree, heapAlloc, mappedReady uint64
-	for {
+	for spins := 0; ; spins++ {
 		heapFree = c.heapFree.load()                         // Free and unscavenged memory.
 		heapAlloc = c.totalAlloc.Load() - c.totalFree.Load() // Heap object bytes in use.
 		mappedReady = c.mappedReady.Load()                   // Total unreleased mapped memory.
 		if heapFree+heapAlloc <= mappedReady {
 			break
+		}
+		if spins == 1<<28 {
+			// A persistent accounting error would spin forever
+			// (and stall the world: this loop has no safe point).
+			print("runtime: heap accounting broken: heapFree=", heapFree, " totalAlloc=", c.totalAlloc.Load(), " totalFree=", c.totalFree.Load(), " mappedReady=", mappedReady, " heapInUse=", c.heapInUse.load(), " heapReleased=", c.heapReleased.load(), "\n")
+			throw("heap accounting broken")
 		}
 		// It is impossible for total unreleased mapped memory to exceed heap memory, but
 		// because these stats are updated independently, we may observe a partial update

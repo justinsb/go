@@ -7008,6 +7008,7 @@ const (
 	OpMoveWB
 	OpZeroWB
 	OpWBend
+	OpRegionAllocEnd
 	OpWB
 	OpHasCPUFeature
 	OpPanicBounds
@@ -106847,6 +106848,11 @@ var opcodeTable = [...]opInfo{
 	},
 	{
 		name:    "WBend",
+		argLen:  1,
+		generic: true,
+	},
+	{
+		name:    "RegionAllocEnd",
 		argLen:  1,
 		generic: true,
 	},

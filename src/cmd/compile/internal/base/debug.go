@@ -57,6 +57,8 @@ type DebugFlags struct {
 	LocationLists         int    `help:"print information about DWARF location list creation"`
 	MaxShapeLen           int    `help:"hash shape names longer than this threshold (default 500)" concurrent:"ok"`
 	MergeLocals           int    `help:"merge together non-interfering local stack slots" concurrent:"ok"`
+	RegionAlloc           int    `help:"expand small allocations into inline region allocations" concurrent:"ok"`
+	RegionParams          int    `help:"skip region store checks on parameters found local at entry" concurrent:"ok"`
 	MergeLocalsDumpFunc   string `help:"dump specified func in merge locals"`
 	MergeLocalsHash       string `help:"hash value for debugging stack slot merging of local variables" concurrent:"ok"`
 	MergeLocalsTrace      int    `help:"trace debug output for locals merging"`

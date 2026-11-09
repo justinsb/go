@@ -143,7 +143,10 @@ func gcPrepareMarkRoots() {
 	// Snapshot heapArenas as markArenas. This snapshot is safe because heapArenas
 	// is append-only.
 	mheap_.markArenas = mheap_.heapArenas[:len(mheap_.heapArenas):len(mheap_.heapArenas)]
-	work.nSpanRoots = len(mheap_.markArenas) * (pagesPerArena / pagesPerSpanRoot)
+	// Memory region blocks (region.go) live in arenas of their own and
+	// hold objects with specials too.
+	regionMarkArenas = regionArenas[:len(regionArenas):len(regionArenas)]
+	work.nSpanRoots = (len(mheap_.markArenas) + len(regionMarkArenas)) * (pagesPerArena / pagesPerSpanRoot)
 
 	// Scan stacks.
 	//
@@ -410,7 +413,13 @@ func markrootSpans(gcw *gcWork, shard int) {
 	sg := mheap_.sweepgen
 
 	// Find the arena and page index into that arena for this shard.
-	ai := mheap_.markArenas[shard/(pagesPerArena/pagesPerSpanRoot)]
+	// The heap arenas come first, then the region arenas.
+	var ai arenaIdx
+	if i := shard / (pagesPerArena / pagesPerSpanRoot); i < len(mheap_.markArenas) {
+		ai = mheap_.markArenas[i]
+	} else {
+		ai = regionMarkArenas[i-len(mheap_.markArenas)]
+	}
 	ha := mheap_.arenas[ai.l1()][ai.l2()]
 	arenaPage := uint(uintptr(shard) * pagesPerSpanRoot % pagesPerArena)
 

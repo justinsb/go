@@ -526,6 +526,39 @@ func (lv *Liveness) markUnsafePoints() {
 
 	for _, b := range lv.f.Blocks {
 		for _, v := range b.Values {
+			if v.Op == ssa.OpRegionAllocEnd {
+				// An inline region allocation (ssagen.regionNewObject):
+				//    C:
+				//      cursor = load r.cursor; limit = load r.fastLimit
+				//      if cursor+size <= limit: goto F else S
+				//    F:
+				//      store r.cursor; zero; set start and pointer bits
+				//      m = RegionAllocEnd ...
+				// A GC cycle that starts between the limit check and
+				// the end of F would not see the object as allocated
+				// black, so none of C and F up to the marker may be
+				// interrupted. C's values before the limit load are
+				// included for simplicity.
+				if len(b.Preds) != 1 {
+					lv.f.Fatalf("inline region allocation block has %d preds, want 1", len(b.Preds))
+				}
+				c := b.Preds[0].Block()
+				if len(c.Succs) != 2 {
+					lv.f.Fatalf("inline region allocation check block has %d succs, want 2", len(c.Succs))
+				}
+				for _, w := range c.Values {
+					lv.unsafePoints.Set(int32(w.ID))
+				}
+				lv.unsafeBlocks.Set(int32(c.ID))
+				for _, w := range b.Values {
+					lv.unsafePoints.Set(int32(w.ID))
+					if w == v {
+						break
+					}
+				}
+				lv.unsafeBlocks.Set(int32(b.ID))
+				continue
+			}
 			if v.Op != ssa.OpWBend {
 				continue
 			}

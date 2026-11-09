@@ -65,17 +65,20 @@ func ConstantLoad() {
 	bsink = []byte("0123456789abcde")
 
 	// 56 = 0x38
-	// amd64:`MOVQ \$3978425819141910832` `MOVB \$56`
+	// The 8-byte constant is shared with the first store above on
+	// amd64: the inline region allocation puts each store in its own
+	// block, so it is materialized once.
+	// amd64:`MOVB \$56`
 	// loong64:`MOVV \$3978425819141910832` `MOVV \$56`
 	bsink = []byte("012345678")
 
 	// 14648 = 0x3938
-	// amd64:`MOVQ \$3978425819141910832` `MOVW \$14648`
+	// amd64:`MOVW \$14648`
 	// loong64:`MOVV \$3978425819141910832` `MOVV \$14648`
 	bsink = []byte("0123456789")
 
 	// 1650538808 = 0x62613938
-	// amd64:`MOVQ \$3978425819141910832` `MOVL \$1650538808`
+	// amd64:`MOVL \$1650538808`
 	// loong64:`MOVV \$3978425819141910832` `MOVV \$1650538808`
 	bsink = []byte("0123456789ab")
 }

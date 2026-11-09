@@ -1,0 +1,7 @@
+config,req_per_s,proc_cpu_us_per_req,gc_cpu_pct,gc_cycles,alloc_kb_per_req,live_mib,peak_heap_mib,freed_pct,faded_pct,abandoned_pct,runs
+full-base-gogc100,49067,35.6,4.06,42,3.66,44.4,85.7,0.0,0.0,0.0,4
+full-region-gogc100,46022,40.0,0.96,9,14.16,43.9,80.4,100.0,0.0,0.5,4
+noparams-base-gogc100,49059,35.5,4.05,42,3.66,41.5,86.8,0.0,0.0,0.0,4
+noparams-region-gogc100,46318,39.5,0.94,9,14.14,47.7,86.3,100.0,0.0,0.6,4
+neither-base-gogc100,47025,37.4,4.01,42,3.66,43.1,86.4,0.0,0.0,0.0,4
+neither-region-gogc100,45862,40.3,1.10,9,14.05,45.7,84.4,100.0,0.0,0.6,4

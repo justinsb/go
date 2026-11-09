@@ -435,8 +435,8 @@ func SetFinalizer(obj any, finalizer any) {
 		// anything it references must not be freed with the region.
 		// The object itself is faded by addspecial.
 		regionFadePtr(gp, uintptr(efaceOf(&finalizer).data))
-		gp.regionIgnore++
-		defer func() { gp.regionIgnore-- }()
+		regionIgnoreBegin(gp)
+		defer regionIgnoreEnd(gp)
 	}
 	e := efaceOf(&obj)
 	etyp := e._type

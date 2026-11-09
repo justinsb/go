@@ -896,6 +896,7 @@ func gcStart(trigger gcTrigger) {
 	// happen, we want to enable assists as early as
 	// possible.
 	setGCPhase(_GCmark)
+	regionMarkStart() // inline region allocation off while marking; see region.go
 
 	gcBgMarkPrepare() // Must happen before assists are enabled.
 	gcPrepareMarkRoots()

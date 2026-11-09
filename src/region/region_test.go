@@ -350,3 +350,43 @@ func TestGCDuringRegions(t *testing.T) {
 	wg.Wait()
 	t.Logf("stats: %+v", region.ReadStats())
 }
+
+// TestFinalizerReferents checks that an object with a finalizer allocated
+// in a region keeps what it references alive until the finalizer runs:
+// finalizer specials of region blocks are GC roots like those of heap
+// spans.
+func TestFinalizerReferents(t *testing.T) {
+	type holder struct {
+		pad  [6]uintptr
+		name string
+		more *[3]int
+	}
+	done := make(chan string, 1)
+	for i := 0; i < 50; i++ {
+		region.Do(func() {
+			name := string([]byte("/tmp/multipart-" + "123456789"))
+			h := &holder{name: name, more: &[3]int{1, 2, 3}}
+			runtime.SetFinalizer(h, func(h *holder) {
+				if h.name != "/tmp/multipart-123456789" || h.more[2] != 3 {
+					done <- "finalizer saw corrupted referents: " + h.name
+					return
+				}
+				done <- ""
+			})
+		})
+		runtime.GC()
+		runtime.GC()
+	}
+	runtime.GC()
+	runtime.GC()
+	for i := 0; i < 50; i++ {
+		select {
+		case msg := <-done:
+			if msg != "" {
+				t.Fatal(msg)
+			}
+		default:
+			i = 50
+		}
+	}
+}

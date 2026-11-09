@@ -5,6 +5,7 @@
 package ssa
 
 import (
+	"cmd/compile/internal/base"
 	"cmd/compile/internal/reflectdata"
 	"cmd/compile/internal/types"
 	"cmd/internal/obj"
@@ -195,6 +196,7 @@ func writebarrier(f *Func) {
 	}
 
 	zeroes := f.computeZeroMap(select1)
+	rp := regionParamsAnalyze(f)
 	for _, b := range f.Blocks { // range loop is safe since the blocks we added contain no stores to expand
 		// first, identify all the stores that need to insert a write barrier.
 		// mark them with WB ops temporarily. record presence of WB ops.
@@ -630,6 +632,7 @@ func writebarrier(f *Func) {
 		}
 		memRegion := wbend
 		var fresh []*Value
+		var byParam [4][]*Value
 		for _, w := range stores {
 			if w.Op == OpStoreWB && !needWBsrc(w.Args[1]) {
 				continue
@@ -638,10 +641,40 @@ func writebarrier(f *Func) {
 				fresh = append(fresh, w)
 				continue
 			}
+			if i := rp.regionParamOf(w); i >= 0 {
+				byParam[i] = append(byParam[i], w)
+				continue
+			}
 			memRegion = regionCheck(w, bRegion, memRegion)
 		}
+		// Stores into a parameter's object are checked only when the
+		// entry check found it outside the region (regionParams).
+		cur := bRegion
+		for i, ws := range byParam {
+			if len(ws) == 0 {
+				continue
+			}
+			bCall := f.NewBlock(BlockPlain)
+			bNext := f.NewBlock(BlockPlain)
+			bCall.Pos, bNext.Pos = pos, pos
+			bit := cur.NewValue2(pos, OpAnd64, cfgtypes.Uintptr, rp.flags, f.ConstInt64(cfgtypes.Uintptr, 1<<i))
+			cur.Kind = BlockIf
+			cur.SetControl(cur.NewValue2(pos, OpNeq64, cfgtypes.Bool, bit, f.ConstInt64(cfgtypes.Uintptr, 0)))
+			cur.Likely = BranchLikely
+			cur.AddEdgeTo(bNext)
+			cur.AddEdgeTo(bCall)
+			memCall := memRegion
+			for _, w := range ws {
+				memCall = regionCheck(w, bCall, memCall)
+			}
+			bCall.AddEdgeTo(bNext)
+			merge := bNext.NewValue0(pos, OpPhi, types.TypeMem)
+			merge.AddArg2(memRegion, memCall)
+			memRegion = merge
+			cur = bNext
+		}
 		if len(fresh) == 0 {
-			bRegion.AddEdgeTo(bAfter)
+			cur.AddEdgeTo(bAfter)
 			// last becomes the merge of the two paths, so that
 			// everything that used the last store's memory now uses
 			// the merged memory.
@@ -654,14 +687,14 @@ func writebarrier(f *Func) {
 		} else {
 			bIgnore := f.NewBlock(BlockPlain)
 			bIgnore.Pos = pos
-			iaddr := bRegion.NewValue1I(pos, OpOffPtr, cfgtypes.BytePtrPtr, abi.GRegionIgnoreOffset, g)
-			ival := bRegion.NewValue2(pos, OpLoad, cfgtypes.BytePtr, iaddr, memRegion)
-			iflag := bRegion.NewValue1(pos, OpIsNonNil, cfgtypes.Bool, ival)
-			bRegion.Kind = BlockIf
-			bRegion.SetControl(iflag)
-			bRegion.Likely = BranchUnlikely
-			bRegion.AddEdgeTo(bIgnore)
-			bRegion.AddEdgeTo(bAfter)
+			iaddr := cur.NewValue1I(pos, OpOffPtr, cfgtypes.BytePtrPtr, abi.GRegionIgnoreOffset, g)
+			ival := cur.NewValue2(pos, OpLoad, cfgtypes.BytePtr, iaddr, memRegion)
+			iflag := cur.NewValue1(pos, OpIsNonNil, cfgtypes.Bool, ival)
+			cur.Kind = BlockIf
+			cur.SetControl(iflag)
+			cur.Likely = BranchUnlikely
+			cur.AddEdgeTo(bIgnore)
+			cur.AddEdgeTo(bAfter)
 			memIgnore := memRegion
 			for _, w := range fresh {
 				memIgnore = regionCheck(w, bIgnore, memIgnore)
@@ -970,65 +1003,229 @@ func isVolatile(v *Value) bool {
 const regionMaxObjectBytes = 16 << 10
 
 // regionFreshDst reports whether the destination of store w is an object
-// that this function allocated (newobject or a specialized malloc) and
-// that has not been published since: no call has run and no pointer to
-// it has been stored to memory between the allocation and w. Such an
-// object is a live, unfaded object of the goroutine's region whenever
-// the goroutine is in a region and allocating in it, so a store into it
-// needs no region check (see runtime.wbRegion).
+// that this function allocated (newobject or a specialized malloc). Such
+// an object is a live object of the goroutine's region whenever the
+// goroutine is in a region and allocating in it, and a store into a live
+// region object needs no region check (see runtime.wbRegion): the
+// object stays one for the rest of the function, published or not,
+// since faded objects' pointers are faded at region exit.
 func regionFreshDst(w *Value, select1 []*Value) bool {
-	obj := w.Args[0]
-	for obj.Op == OpOffPtr || obj.Op == OpCopy || obj.Op == OpAddPtr || obj.Op == OpPtrIndex {
-		obj = obj.Args[0]
-	}
-	allocMem, ok := IsNewObject(obj, select1)
-	if !ok {
+	obj := regionBase(w.Args[0])
+	if _, ok := IsNewObject(obj, select1); !ok {
 		return false
 	}
 	t := obj.Type
-	if !t.IsPtr() || t.Elem().Size() == 0 || t.Elem().Size() > regionMaxObjectBytes {
-		return false
-	}
-	for m := w.MemoryArg(); m != allocMem; {
-		switch m.Op {
-		case OpStore, OpStoreWB:
-			if !regionDerived(m.Args[0], obj) && regionDerived(m.Args[1], obj) {
-				return false // a pointer to obj is stored elsewhere
-			}
-		case OpMove, OpMoveWB:
-			if !regionDerived(m.Args[0], obj) {
-				return false // the copied memory might hold a pointer to obj
-			}
-		case OpZero, OpZeroWB, OpVarDef, OpVarLive:
-		case OpSelectN:
-			// A static call publishes obj only through an argument
-			// derived from it that the callee may let escape (the
-			// callee's escape summary, see AuxCall.NoLeakArgs). A
-			// callee that never sees obj cannot publish it: nothing in
-			// memory points to obj yet.
-			call := m.Args[0]
-			if call.Op != OpStaticLECall {
-				return false
-			}
-			aux := call.Aux.(*AuxCall)
-			for i, a := range call.Args[:len(call.Args)-1] {
-				if regionDerived(a, obj) && !aux.ArgNoLeak(i) {
-					return false
-				}
-			}
-			m = call
-		default:
-			return false // a dynamic call, a phi, or an earlier barrier batch
-		}
-		m = m.MemoryArg()
-	}
-	return true
+	return t.IsPtr() && t.Elem().Size() != 0 && t.Elem().Size() <= regionMaxObjectBytes
 }
 
-// regionDerived reports whether v is obj or an address derived from it.
-func regionDerived(v, obj *Value) bool {
-	for v.Op == OpOffPtr || v.Op == OpCopy || v.Op == OpAddPtr || v.Op == OpPtrIndex || v.Op == OpConvert {
+// regionBase strips address arithmetic and nil checks from v: the object
+// a store into *v is into.
+func regionBase(v *Value) *Value {
+	for v.Op == OpOffPtr || v.Op == OpCopy || v.Op == OpAddPtr || v.Op == OpPtrIndex || v.Op == OpNilCheck {
 		v = v.Args[0]
 	}
-	return v == obj
+	return v
+}
+
+// regionParams is the per-function state of the store check elision on
+// stores into the objects of pointer parameters. At entry, if the
+// goroutine is in a region, runtime.regionParamsLocalN reports as a bit
+// mask which parameters point into live objects of the region; a store
+// into such an object needs no check (see regionFreshDst), so the check
+// is made conditional on the bit. The call costs about as much as one
+// check, so only parameters that are stored into are considered, and at
+// most four.
+type regionParams struct {
+	params []*Value // the parameters, by bit
+	flags  *Value   // the mask (a phi: 0 when not in a region)
+}
+
+// regionParamOf returns the bit of the parameter whose object w stores
+// into, or -1.
+func (rp *regionParams) regionParamOf(w *Value) int {
+	if rp == nil {
+		return -1
+	}
+	base := regionBase(w.Args[0])
+	for i, p := range rp.params {
+		if p == base {
+			return i
+		}
+	}
+	return -1
+}
+
+// regionParamsAnalyze picks the parameters whose objects the function
+// stores pointers into and inserts the entry check. It must run before
+// any block is rewritten.
+func regionParamsAnalyze(f *Func) *regionParams {
+	if base.Debug.RegionParams == 0 || f.Config.PtrSize != 8 || base.Flag.Cfg.Instrumenting ||
+		f.ABIDefault != f.ABI1 || len(f.Config.intParamRegs) < 4 {
+		return nil
+	}
+	// The runtime itself must not call into the check (nosplit
+	// functions, the system stack); the map implementation is ordinary
+	// code with hot stores into its parameters (Iter.Next).
+	if base.Flag.CompilingRuntime && base.Ctxt.Pkgpath != "internal/runtime/maps" {
+		return nil
+	}
+	// Pointer stores by parameter, and whether a parameter has a store
+	// that runs on every path to a return: the entry check costs about
+	// one store check, so a single store on a cold path (an error
+	// field, say) does not pay for it.
+	count := make(map[*Value]int)
+	always := make(map[*Value]bool)
+	var exits []*Block
+	for _, b := range f.Blocks {
+		if b.Kind == BlockRet || b.Kind == BlockRetJmp {
+			exits = append(exits, b)
+		}
+	}
+	sdom := f.Sdom()
+	for _, b := range f.Blocks {
+		for _, v := range b.Values {
+			switch v.Op {
+			case OpStore:
+				if !v.Aux.(*types.Type).HasPointers() || !needWBsrc(v.Args[1]) {
+					continue
+				}
+			case OpMove:
+				if !v.Aux.(*types.Type).HasPointers() {
+					continue
+				}
+			default:
+				continue
+			}
+			p := regionBase(v.Args[0])
+			if (p.Op == OpArg || p.Op == OpArgIntReg) && p.Block == f.Entry && (p.Type.IsPtr() || p.Type.IsUnsafePtr()) {
+				count[p]++
+				if !always[p] {
+					all := len(exits) > 0
+					for _, e := range exits {
+						if !sdom.IsAncestorEq(b, e) {
+							all = false
+							break
+						}
+					}
+					always[p] = all
+				}
+			}
+		}
+	}
+	var params []*Value
+	for p, n := range count {
+		if n >= 2 || always[p] {
+			params = append(params, p)
+		}
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	// The most stored-into first; ties by ID for a deterministic order.
+	for i := 1; i < len(params); i++ {
+		for j := i; j > 0 && (count[params[j]] > count[params[j-1]] || count[params[j]] == count[params[j-1]] && params[j].ID < params[j-1].ID); j-- {
+			params[j], params[j-1] = params[j-1], params[j]
+		}
+	}
+	if len(params) > 4 {
+		params = params[:4]
+	}
+	return &regionParams{params: params, flags: regionParamsEntryCheck(f, params)}
+}
+
+// regionParamsEntryCheck splits the entry block so that the function
+// starts with
+//
+//	if g.region != nil { flags = regionParamsLocalN(params...) } else { flags = 0 }
+//
+// and returns flags. The values that must be in the entry block (the
+// arguments, InitMem, SP, SB, the closure pointer) move to the new
+// entry; everything else stays in the old one, which follows the
+// check, and takes its memory from the merge.
+func regionParamsEntryCheck(f *Func, params []*Value) *Value {
+	old := f.Entry
+	pos := old.Pos.WithNotStmt()
+	entry := f.NewBlock(BlockPlain)
+	bCheck := f.NewBlock(BlockPlain)
+	bJoin := f.NewBlock(BlockPlain)
+	entry.Pos, bCheck.Pos, bJoin.Pos = pos, pos, pos
+	var keep []*Value
+	var initMem *Value
+	for _, v := range old.Values {
+		switch v.Op {
+		case OpInitMem, OpSP, OpSB, OpArg, OpArgIntReg, OpArgFloatReg, OpGetClosurePtr:
+			if v.Op == OpInitMem {
+				initMem = v
+			}
+			v.Block = entry
+			entry.Values = append(entry.Values, v)
+		default:
+			keep = append(keep, v)
+		}
+	}
+	old.Values = keep
+	if initMem == nil {
+		initMem = entry.NewValue0(pos, OpInitMem, types.TypeMem)
+	}
+	cfgtypes := &f.Config.Types
+	uptr := cfgtypes.Uintptr
+
+	// entry: in a region?
+	g := entry.NewValue1(pos, OpGetG, cfgtypes.BytePtr, initMem)
+	r := entry.NewValue2(pos, OpLoad, cfgtypes.BytePtr, entry.NewValue1I(pos, OpOffPtr, cfgtypes.BytePtrPtr, abi.GRegionOffset, g), initMem)
+	zero := entry.NewValue0I(pos, OpConst64, uptr, 0)
+	entry.Kind = BlockIf
+	entry.SetControl(entry.NewValue1(pos, OpIsNonNil, cfgtypes.Bool, r))
+	entry.Likely = BranchUnlikely
+	entry.AddEdgeTo(bCheck)
+	entry.AddEdgeTo(bJoin)
+
+	// bCheck: the runtime call, arguments in registers.
+	fn := f.fe.Syslook("regionParamsLocal" + string(rune('0'+len(params))))
+	argTypes := make([]*types.Type, len(params))
+	for i := range argTypes {
+		argTypes[i] = cfgtypes.BytePtr
+	}
+	aux := StaticAuxCall(fn, f.ABIDefault.ABIAnalyzeTypes(argTypes, []*types.Type{uptr}))
+	call := bCheck.NewValue0A(pos, OpStaticCall, aux.LateExpansionResultType(), aux)
+	call.AddArgs(params...)
+	call.AddArgs(initMem)
+	call.AuxInt = aux.abiInfo.ArgWidth()
+	flagsC := bCheck.NewValue1I(pos, OpSelectN, uptr, 0, call)
+	memC := bCheck.NewValue1I(pos, OpSelectN, types.TypeMem, 1, call)
+	bCheck.AddEdgeTo(bJoin)
+
+	// bJoin: merge, then the old entry.
+	flags := bJoin.NewValue0(pos, OpPhi, uptr)
+	flags.AddArg2(zero, flagsC)
+	mem := bJoin.NewValue0(pos, OpPhi, types.TypeMem)
+	mem.AddArg2(initMem, memC)
+	bJoin.AddEdgeTo(old)
+
+	// The function's memory now starts at the merge.
+	for _, b := range f.Blocks {
+		if b == entry || b == bCheck || b == bJoin {
+			continue
+		}
+		for _, v := range b.Values {
+			for i, a := range v.Args {
+				if a == initMem {
+					v.SetArg(i, mem)
+				}
+			}
+		}
+		for i, c := range b.ControlValues() {
+			if c == initMem {
+				b.ReplaceControl(i, mem)
+			}
+		}
+	}
+	f.Entry = entry
+	for i, b := range f.Blocks {
+		if b == entry {
+			f.Blocks[0], f.Blocks[i] = entry, f.Blocks[0]
+			break
+		}
+	}
+	return flags
 }

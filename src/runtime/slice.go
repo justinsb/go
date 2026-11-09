@@ -180,9 +180,9 @@ func growslice(oldPtr unsafe.Pointer, newLen, oldCap, num int, et *_type) slice 
 	// (or escaped it) grows outside the region too, so that the new
 	// array does not escape as soon as the slice header is stored.
 	if gp := getg(); gp.region != nil && gp.regionIgnore == 0 && oldPtr != nil && !regionIsLocal(gp, uintptr(oldPtr)) {
-		gp.regionIgnore++
+		regionIgnoreBegin(gp)
 		s := growslice(oldPtr, newLen, oldCap, num, et)
-		gp.regionIgnore--
+		regionIgnoreEnd(gp)
 		return s
 	}
 	oldLen := newLen - num

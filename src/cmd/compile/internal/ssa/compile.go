@@ -487,6 +487,7 @@ var passes = [...]pass{
 	{name: "dse", fn: dse},
 	{name: "memcombine", fn: memcombine},
 	{name: "writebarrier", fn: writebarrier, required: true}, // expand write barrier ops
+	{name: "region alloc", fn: regionalloc},                  // expand small allocations into inline region allocations
 	{name: "insert resched checks", fn: insertLoopReschedChecks,
 		disabled: !buildcfg.Experiment.PreemptibleLoops}, // insert resched checks in loops.
 	{name: "cpufeatures", fn: cpufeatures, required: buildcfg.Experiment.SIMD, disabled: !buildcfg.Experiment.SIMD},
@@ -532,6 +533,11 @@ var passOrder = [...]constraint{
 	{"dse", "insert resched checks"},
 	// insert resched checks adds new blocks containing generic instructions
 	{"insert resched checks", "lower"},
+	// region alloc must see the allocation calls after the write barrier pass
+	// elided barriers on stores into them, and before lowering.
+	{"writebarrier", "region alloc"},
+	{"region alloc", "insert resched checks"},
+	{"region alloc", "lower"},
 	{"insert resched checks", "tighten"},
 
 	// prove relies on common-subexpression elimination for maximum benefits.

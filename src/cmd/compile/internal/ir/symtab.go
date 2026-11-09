@@ -68,6 +68,7 @@ type symsStruct struct {
 	WBMove                    *obj.LSym
 	WBRegion                  *obj.LSym
 	WBRegionMove              *obj.LSym
+	RegionParamsLocal         [4]*obj.LSym
 	// Wasm
 	SigPanic             *obj.LSym
 	Staticuint64s        *obj.LSym

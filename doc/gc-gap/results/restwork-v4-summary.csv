@@ -1,0 +1,13 @@
+config,req_per_s,proc_cpu_us_per_req,gc_cpu_pct,gc_cycles,alloc_kb_per_req,live_mib,peak_heap_mib,freed_pct,faded_pct,abandoned_pct,runs
+full-base-gogc100,52655,33.3,3.94,42,3.66,45.4,87.2,0.0,0.0,0.0,2
+full-region-gogc100,47478,38.9,0.92,9,14.30,42.7,86.5,100.0,0.0,0.5,2
+full-base-ballast,49144,38.6,14.56,7,3.66,255.5,466.5,0.0,0.0,0.0,2
+full-region-ballast,47994,40.3,5.60,3,15.01,270.5,382.6,100.0,0.0,0.9,2
+noparams-base-gogc100,49560,34.9,4.14,42,3.66,43.1,85.3,0.0,0.0,0.0,2
+noparams-region-gogc100,48504,37.5,1.08,9,14.01,44.5,79.6,100.0,0.0,0.6,2
+noparams-base-ballast,51781,36.6,14.47,7,3.66,255.0,479.3,0.0,0.0,0.0,2
+noparams-region-ballast,46825,40.7,4.78,3,15.09,266.1,377.7,100.0,0.0,0.8,2
+neither-base-gogc100,49963,35.0,3.98,42,3.66,45.9,85.5,0.0,0.0,0.0,2
+neither-region-gogc100,45524,41.0,1.02,9,14.00,46.1,83.9,100.0,0.0,0.6,2
+neither-base-ballast,47988,40.0,14.86,8,3.66,246.9,455.1,0.0,0.0,0.0,2
+neither-region-ballast,45924,41.9,5.50,3,15.07,268.0,378.5,100.0,0.0,0.9,2
