@@ -1000,8 +1000,25 @@ func regionFreshDst(w *Value, select1 []*Value) bool {
 				return false // the copied memory might hold a pointer to obj
 			}
 		case OpZero, OpZeroWB, OpVarDef, OpVarLive:
+		case OpSelectN:
+			// A static call publishes obj only through an argument
+			// derived from it that the callee may let escape (the
+			// callee's escape summary, see AuxCall.NoLeakArgs). A
+			// callee that never sees obj cannot publish it: nothing in
+			// memory points to obj yet.
+			call := m.Args[0]
+			if call.Op != OpStaticLECall {
+				return false
+			}
+			aux := call.Aux.(*AuxCall)
+			for i, a := range call.Args[:len(call.Args)-1] {
+				if regionDerived(a, obj) && !aux.ArgNoLeak(i) {
+					return false
+				}
+			}
+			m = call
 		default:
-			return false // a call, a phi, or an earlier barrier batch
+			return false // a dynamic call, a phi, or an earlier barrier batch
 		}
 		m = m.MemoryArg()
 	}

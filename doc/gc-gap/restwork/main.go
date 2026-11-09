@@ -61,6 +61,7 @@ var (
 	label     = flag.String("label", "", "client: label for the output")
 	jsonOut   = flag.Bool("json", false, "client: JSON output")
 	cpuProf   = flag.String("cpuprofile", "", "server: write a CPU profile to this file on SIGINT/SIGTERM")
+	memProf   = flag.String("memprofile", "", "server: write an allocation profile (MemProfileRate=1) to this file on SIGINT/SIGTERM")
 )
 
 // ---- domain ---------------------------------------------------------------
@@ -173,6 +174,14 @@ func (db *DB) GetItem(id int) (*Item, error) {
 
 // PutOrder stores the serialized order. The bytes outlive the request.
 func (db *DB) PutOrder(id string, data []byte) {
+	// The database keeps what it stores, so it copies the key and the
+	// record onto the ordinary heap: the request's own copies stay in
+	// the memory region (see package region). A real driver serializes
+	// here anyway.
+	region.Ignore(func() {
+		id = strings.Clone(id)
+		data = bytes.Clone(data)
+	})
 	db.mu.Lock()
 	db.orders[id] = data
 	db.nOrder++
@@ -496,20 +505,36 @@ func runServer(addr string) {
 	}
 	fmt.Printf("listening on %s (items=%d cache=%d GODEBUG=%q)\n", ln.Addr(), *nItems, *cacheCap, os.Getenv("GODEBUG"))
 	srv := &http.Server{Handler: mux}
-	if *cpuProf != "" {
-		f, err := os.Create(*cpuProf)
-		if err != nil {
-			log.Fatal(err)
+	if *cpuProf != "" || *memProf != "" {
+		var cf *os.File
+		if *cpuProf != "" {
+			var err error
+			if cf, err = os.Create(*cpuProf); err != nil {
+				log.Fatal(err)
+			}
+			if err := pprof.StartCPUProfile(cf); err != nil {
+				log.Fatal(err)
+			}
 		}
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal(err)
+		if *memProf != "" {
+			runtime.MemProfileRate = 1
 		}
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 		go func() {
 			<-sig
-			pprof.StopCPUProfile()
-			f.Close()
+			if cf != nil {
+				pprof.StopCPUProfile()
+				cf.Close()
+			}
+			if *memProf != "" {
+				runtime.GC() // the profile covers completed GC cycles only
+				mf, err := os.Create(*memProf)
+				if err == nil {
+					pprof.Lookup("allocs").WriteTo(mf, 0)
+					mf.Close()
+				}
+			}
 			os.Exit(0)
 		}()
 	}

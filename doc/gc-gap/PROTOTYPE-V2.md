@@ -163,20 +163,96 @@ Compared with the first prototype (`PROTOTYPE.md`: 43% more CPU per request,
   garbage, so its peak tracks its live data.
 
 
+## Third round: the pool and the stores
+
+The second round's profile put half of the remaining gap in the pool
+workaround and a quarter in the store check. This round removed the first
+and attacked the second.
+
+**The region is the pool.** `sync.Pool.Get` inside a region returns a fresh
+object (`New`), and `Put` drops objects that belong to the region. Adoption
+is gone. The cost moves from walking and scanning pooled objects (8% of
+CPU) to allocating them (the two large per-request buffers, 8 KB for the
+body drain and 4 KB for the response writer, are most of the 11.7 KB a
+request now activates), which the bump allocator does cheaply; the
+allocator's own fixed costs were then cut: free runs are found by bit scan
+over a free-line bitmap instead of a byte scan, lines are activated a
+bitmap word at a time, and pointer bits for arrays of small elements are
+written as a tiled 64-bit pattern.
+
+**`sync.Once` bodies allocate outside the region.** What a Once builds
+lives as long as the Once, so this is the natural place for the "populate
+a global" intent; the type caches of `reflect` and `encoding/json` are all
+behind a Once or a `sync.Map` store and had already shown up as a one-time
+cost only.
+
+**Aligned blocks in a dedicated range.** Region blocks come from 64 MB
+arenas of their own (a separate hint list to the heap's arena allocator),
+so they are 64 KB aligned and lie in a known address range with an exact
+per-arena bit set. The store barrier's common case, a live region object
+stored into a live region object of the same block, is now: range test,
+arena bit, `ptr ^ slot < 64K`, one header read for the owner and two line
+states. No span lookup. Freed blocks go on a ready list and are never
+returned to the page heap (as user arena chunks are not).
+
+**Freshness across calls.** The compiler's escape analysis already
+summarizes, per parameter, whether the callee lets it flow anywhere (to
+the heap, a result, or another parameter's content). The write barrier
+pass now carries that summary on each static call and lets the
+"freshly allocated and unpublished" proof survive calls whose arguments
+derived from the object do not leak, and calls that never see the object
+at all. This is the `readRequest` shape: an object allocated early and
+filled in across many calls. Store checks that reach the slow path fell
+from 153 to 41 per request.
+
+**Results** (`restwork/run.sh`, same workload and machine, two runs each;
+`results/restwork-summary.csv`):
+
+| config | req/s | CPU us/req | GC CPU % | GC cycles | live MiB | peak heap MiB | abandoned % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| base, GOGC=100 | 52227 | 33.2 | 3.8 | 42 | 45.5 | 85.0 | |
+| region, GOGC=100 | 47816 | 39.4 | 1.0 | 9 | 43.3 | 87.6 | 0.6 |
+| base, GOGC=50 | 53109 | 32.8 | 7.5 | 88 | 40.2 | 64.8 | |
+| region, GOGC=50 | 49035 | 38.3 | 1.8 | 17 | 46.2 | 65.8 | 1.2 |
+| base, GOGC=25 | 48453 | 37.5 | 14.2 | 195 | 40.5 | 55.4 | |
+| region, GOGC=25 | 49058 | 38.8 | 3.4 | 34 | 40.7 | 56.2 | 2.0 |
+| base, GOGC=100, 256 MiB ballast | 51403 | 37.7 | 15.2 | 8 | 247.2 | 448.8 | |
+| region, GOGC=100, 256 MiB ballast | 50615 | 38.7 | 5.2 | 3 | 270.1 | 377.4 | 0.9 |
+
+Escapes are six per thousand requests in every region row (0.0% of bytes).
+
+At GOGC=100 the gap is 6 us of CPU per request (19%) and 8% of
+throughput, from 7 us and 21% after the second round; the order store and
+the cache insert, the workload's two genuine escapes, are placed outside
+the region by the handler with `region.Ignore`, and the peak heap equals
+the baseline's. The balance shifts with the collector's cost: at GOGC=25
+the region server is 3% more CPU and 1% *more* throughput, and with 256 MiB
+of long-lived data it is 3% more CPU, 2% less throughput, a third of the
+GC CPU and a 16% lower peak heap. The profile (`results/restwork-prof-v3-on.txt`) attributes
+what is left: allocation 9.5% (the baseline's allocator is 7%), store
+check 5.4%, region exit 6.9%, typed-copy checks 2.4%. Exit happens after
+the response has been written and does not add latency.
+
+**Next.** Function versioning, as discussed: a second body per function
+that assumes its pointer parameters are live region objects, chosen by the
+caller when it can prove it and entered from the general body when
+`g.region == nil` or an entry check passes. The freshness-across-calls
+step is its caller-side half.
+
 ## What is still open
 
-- The remaining escapes (about 0.3 per request, 9 bytes) are stores into
-  pooled objects' sub-structures beyond the adoption depth, map inserts into
-  pooled maps, and runtime-internal transients (`gopark` recording the lock
-  a goroutine waits on). None is a correctness problem; each costs a pinned
-  line until the next GC.
-- The store check still costs about 150 slow-path calls per request. The
-  fast path (both pointer and slot in active, escape-free lines) is a few
-  loads; a dedicated address range for region blocks would make the first
-  test a mask, and static elision could be extended from fresh objects to
-  values loaded from known-escaped objects.
-- The exit cost is now dominated by freeing lines and pinning faded ones,
-  proportional to lines touched rather than to size classes.
+- The remaining escapes (six per thousand requests) are runtime-internal
+  transients (`gopark` recording the lock a goroutine waits on) and the
+  rare non-standard request method. None is a correctness problem; each
+  costs a pinned line until the next GC.
+- The store check costs about 40 slow-path calls per request after the
+  third round; the fast path is a range test, an xor and three header
+  loads. Function versioning would remove the remaining checks on stores
+  into parameters.
+- The exit cost is dominated by freeing lines (clearing the pointer bits
+  of their objects) and pinning faded ones; it runs after the response is
+  written.
+- Region arenas are never returned to the operating system.
 - Regions ending during a mark phase still free nothing (about 0.4% here).
 - Request-scoped regions shared by a handler and the goroutines it spawns
   (the structured-concurrency scope discussed earlier) are not implemented;

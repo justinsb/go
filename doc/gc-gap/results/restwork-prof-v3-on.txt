@@ -1,0 +1,69 @@
+File: restwork-v2
+Build ID: 82a3af455ca937eba809970039debaae72a75303
+Type: cpu
+Time: 2026-11-09 14:28:35 UTC
+Duration: 7.81s, Total samples = 11.43s (146.37%)
+Showing nodes accounting for 7.22s, 63.17% of 11.43s total
+Dropped 398 nodes (cum <= 0.06s)
+Showing top 60 nodes out of 238
+      flat  flat%   sum%        cum   cum%
+     1.80s 15.75% 15.75%      1.80s 15.75%  internal/runtime/syscall/linux.Syscall6
+     0.28s  2.45% 18.20%      0.62s  5.42%  runtime.wbRegion
+     0.26s  2.27% 20.47%      1.08s  9.45%  runtime.regionAlloc
+     0.23s  2.01% 22.48%      0.49s  4.29%  runtime.(*mspan).regionFreeActiveLines
+     0.23s  2.01% 24.50%      0.24s  2.10%  runtime.(*regionState).activateTo
+     0.21s  1.84% 26.33%      0.23s  2.01%  runtime.regionWritePtrBits
+     0.20s  1.75% 28.08%      0.20s  1.75%  time.runtimeNow
+     0.19s  1.66% 29.75%      2.40s 21.00%  encoding/json/v2.makeStructArshaler.func2
+     0.19s  1.66% 31.41%      0.19s  1.66%  runtime.memmove
+     0.17s  1.49% 32.90%      0.17s  1.49%  runtime.(*regionBlockHdr).lineLiveUnfaded (inline)
+     0.16s  1.40% 34.30%      0.32s  2.80%  encoding/json/internal/jsonwire.AppendQuote
+     0.16s  1.40% 35.70%      0.33s  2.89%  internal/runtime/maps.(*Iter).Next
+     0.14s  1.22% 36.92%      0.14s  1.22%  internal/runtime/maps.memHashAES
+     0.14s  1.22% 38.15%      0.14s  1.22%  runtime.(*regionBlockHdr).clearPtrBits (inline)
+     0.14s  1.22% 39.37%      0.14s  1.22%  runtime.memclrNoHeapPointers
+     0.14s  1.22% 40.59%      0.15s  1.31%  runtime.spanOf (inline)
+     0.13s  1.14% 41.73%      0.13s  1.14%  runtime.(*mspan).regionObjSize
+     0.12s  1.05% 42.78%      0.12s  1.05%  runtime.futex
+     0.12s  1.05% 43.83%      0.12s  1.05%  runtime.regionArenaIsBlock (inline)
+     0.12s  1.05% 44.88%      0.27s  2.36%  runtime.regionBulkCheck
+     0.11s  0.96% 45.84%      0.24s  2.10%  runtime.(*regionState).isRegionObject
+     0.10s  0.87% 46.72%      0.55s  4.81%  encoding/json/v2.makeStringArshaler.func1
+     0.10s  0.87% 47.59%      0.15s  1.31%  runtime.regionCheckStore
+     0.09s  0.79% 48.38%      0.09s  0.79%  internal/runtime/atomic.(*Uint32).CompareAndSwap (inline)
+     0.08s   0.7% 49.08%      0.09s  0.79%  runtime.casgstatus
+     0.07s  0.61% 49.69%      0.07s  0.61%  runtime.getMCache (inline)
+     0.07s  0.61% 50.31%      0.26s  2.27%  runtime.mapaccess2_faststr
+     0.07s  0.61% 50.92%      0.23s  2.01%  sync.(*Pool).Get
+     0.06s  0.52% 51.44%      0.92s  8.05%  encoding/json/v2.makeMapArshaler.func2
+     0.06s  0.52% 51.97%      0.06s  0.52%  indexbytebody
+     0.06s  0.52% 52.49%      0.16s  1.40%  internal/runtime/maps.(*Map).getWithoutKeySmallFastStr
+     0.06s  0.52% 53.02%      0.06s  0.52%  runtime.(*regionState).closeRun
+     0.06s  0.52% 53.54%      0.46s  4.02%  runtime.growslice
+     0.06s  0.52% 54.07%      0.08s   0.7%  runtime.lock2
+     0.06s  0.52% 54.59%      0.24s  2.10%  runtime.mallocgcSmallScanSlowPath
+     0.06s  0.52% 55.12%      0.28s  2.45%  runtime.mapassign_faststr
+     0.05s  0.44% 55.56%      0.08s   0.7%  bufio.(*Writer).WriteString
+     0.05s  0.44% 55.99%      0.06s  0.52%  encoding/json/jsontext.(*stateEntry).Increment
+     0.05s  0.44% 56.43%      0.91s  7.96%  encoding/json/v2.makeSliceArshaler.func2
+     0.05s  0.44% 56.87%      0.11s  0.96%  main.(*Cache).Get
+     0.05s  0.44% 57.31%      1.50s 13.12%  net/http.(*conn).readRequest
+     0.05s  0.44% 57.74%      0.18s  1.57%  runtime.(*regionState).scanOuterStack
+     0.05s  0.44% 58.18%      1.02s  8.92%  runtime.mallocgc
+     0.04s  0.35% 58.53%      0.19s  1.66%  encoding/json/jsontext.(*decoderState).consumeObject
+     0.04s  0.35% 58.88%      0.32s  2.80%  encoding/json/jsontext.(*encoderState).WriteToken
+     0.04s  0.35% 59.23%      9.74s 85.21%  net/http.(*conn).serveRequest
+     0.04s  0.35% 59.58%      0.08s   0.7%  reflect.Value.Field
+     0.04s  0.35% 59.93%      0.07s  0.61%  runtime.unlock2
+     0.04s  0.35% 60.28%      0.09s  0.79%  time.Time.appendFormat
+     0.03s  0.26% 60.54%      0.61s  5.34%  bufio.(*Reader).fill
+     0.03s  0.26% 60.80%      0.11s  0.96%  context.(*cancelCtx).propagateCancel
+     0.03s  0.26% 61.07%      0.26s  2.27%  encoding/json/jsontext.(*decoderState).consumeValue
+     0.03s  0.26% 61.33%      0.07s  0.61%  encoding/json/jsontext.(*decoderState).reset
+     0.03s  0.26% 61.59%      0.07s  0.61%  encoding/json/jsontext.(*encoderState).reset
+     0.03s  0.26% 61.85%      0.11s  0.96%  encoding/json/jsontext.(*stateMachine).pushObject (inline)
+     0.03s  0.26% 62.12%      0.07s  0.61%  encoding/json/jsontext.Token.Kind (inline)
+     0.03s  0.26% 62.38%      0.06s  0.52%  internal/strconv.AppendUint
+     0.03s  0.26% 62.64%      2.65s 23.18%  main.(*server).handleItem
+     0.03s  0.26% 62.90%      2.08s 18.20%  main.(*server).handleOrder
+     0.03s  0.26% 63.17%      0.10s  0.87%  net/textproto.canonicalMIMEHeaderKey

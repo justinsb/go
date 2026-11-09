@@ -21,6 +21,7 @@ import (
 
 	"cmd/compile/internal/abi"
 	"cmd/compile/internal/base"
+	"cmd/compile/internal/escape"
 	"cmd/compile/internal/ir"
 	"cmd/compile/internal/liveness"
 	"cmd/compile/internal/objw"
@@ -5159,6 +5160,7 @@ func (s *state) call(n *ir.CallExpr, k callKind, returnResultAddr bool, deferExt
 			}
 		case calleeLSym != nil:
 			aux := ssa.StaticAuxCall(calleeLSym, params)
+			aux.NoLeakArgs = noLeakArgs(n.Fun.Type())
 			call = s.newValue0A(ssa.OpStaticLECall, aux.LateExpansionResultType(), aux)
 			if k == callTail {
 				call.Op = ssa.OpTailLECall
@@ -8163,3 +8165,22 @@ func isStructNotSIMD(t *types.Type) bool {
 }
 
 var BoundsCheckFunc [ssa.BoundsKindCount]*obj.LSym
+
+// noLeakArgs returns the bit set of parameters of fntype (receiver
+// first) that the function's escape analysis found to flow nowhere. See
+// ssa.AuxCall.NoLeakArgs.
+func noLeakArgs(fntype *types.Type) uint64 {
+	var m uint64
+	for i, f := range fntype.RecvParams() {
+		if i >= 64 {
+			break
+		}
+		if f.Type == nil || !f.Type.HasPointers() {
+			continue
+		}
+		if !escape.ParseLeaks(f.Note).Any() {
+			m |= 1 << uint(i)
+		}
+	}
+	return m
+}

@@ -75,6 +75,14 @@ func (o *Once) doSlow(f func()) {
 	defer o.m.Unlock()
 	if !o.done.Load() {
 		defer o.done.Store(true)
-		f()
+		// What f builds lives as long as the Once, so inside a memory
+		// region (see package region) it is allocated outside it.
+		runtime_regionIgnore(f)
 	}
 }
+
+// runtime_regionIgnore runs f with its allocations placed outside the
+// calling goroutine's memory region, if any. Implemented in the runtime.
+//
+//go:noescape
+func runtime_regionIgnore(f func())

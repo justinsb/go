@@ -101,10 +101,9 @@ func (p *Pool) Put(x any) {
 	if x == nil {
 		return
 	}
-	if !runtime_regionUnadopt(efaceData(x)) {
-		// Inside a memory region, an object of the region is freed when
-		// the region ends and must not be pooled. (An object adopted
-		// from the pool has just been released; see Get.)
+	if !runtime_regionMayPool(efaceData(x)) {
+		// Inside a memory region, an object allocated in the region is
+		// freed when the region ends and must not be pooled.
 		return
 	}
 	if race.Enabled {
@@ -136,6 +135,16 @@ func (p *Pool) Put(x any) {
 // If Get would otherwise return nil and p.New is non-nil, Get returns
 // the result of calling p.New.
 func (p *Pool) Get() any {
+	if runtime_regionActive() {
+		// Inside a memory region the region is the pool: a fresh object
+		// is bump-allocated and freed in bulk when the region ends,
+		// which is cheaper than sharing a pooled object with other
+		// requests and tracking what the request stores into it.
+		if p.New != nil {
+			return p.New()
+		}
+		return nil
+	}
 	if race.Enabled {
 		race.Disable()
 	}
@@ -157,15 +166,6 @@ func (p *Pool) Get() any {
 		if x != nil {
 			race.Acquire(poolRaceAddr(x))
 		}
-	}
-	if x != nil && !runtime_regionAdopt(efaceData(x)) {
-		// Inside a memory region the pooled object is adopted by the
-		// region, so that storing region pointers into it does not make
-		// them escape; the region checks its contents when it is put
-		// back. If the region cannot adopt any more objects, keep the
-		// pooled one for others and allocate instead.
-		p.Put(x)
-		x = nil
 	}
 	if x == nil && p.New != nil {
 		x = p.New()
@@ -329,8 +329,8 @@ func runtime_procPin() int
 func runtime_procUnpin()
 
 // Memory regions (see package region); implemented in the runtime.
-// runtime_regionAdopt records that the region holds the pooled object p
-// and reports false if it cannot. runtime_regionUnadopt is called when p
-// is returned to the pool and reports whether p may be pooled.
-func runtime_regionAdopt(p unsafe.Pointer) bool
-func runtime_regionUnadopt(p unsafe.Pointer) bool
+// runtime_regionActive reports whether the calling goroutine is in a
+// region; runtime_regionMayPool reports whether the object p may be kept
+// in a pool (objects of the region itself may not).
+func runtime_regionActive() bool
+func runtime_regionMayPool(p unsafe.Pointer) bool

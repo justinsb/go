@@ -122,6 +122,17 @@ type AuxCall struct {
 	Fn      *obj.LSym
 	reg     *regInfo // regInfo for this call
 	abiInfo *abi.ABIParamResultInfo
+	// NoLeakArgs has bit i set if the callee's escape analysis found
+	// that its i'th parameter (receiver first) flows nowhere: not to the
+	// heap, to a result, or to another parameter's content. A pointer
+	// passed in such an argument cannot be published by the call. Used
+	// by the memory-region store check elision (regionFreshDst).
+	NoLeakArgs uint64
+}
+
+// ArgNoLeak reports whether the callee cannot publish its i'th argument.
+func (a *AuxCall) ArgNoLeak(i int) bool {
+	return i < 64 && a.NoLeakArgs>>uint(i)&1 != 0
 }
 
 // Reg returns the regInfo for a given call, combining the derived in/out register masks

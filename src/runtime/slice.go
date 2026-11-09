@@ -183,9 +183,6 @@ func growslice(oldPtr unsafe.Pointer, newLen, oldCap, num int, et *_type) slice 
 		gp.regionIgnore++
 		s := growslice(oldPtr, newLen, oldCap, num, et)
 		gp.regionIgnore--
-		// An array grown from one the region adopted (a pooled
-		// object's buffer) is adopted in its place.
-		gp.region.adoptGrown(uintptr(oldPtr), uintptr(s.array))
 		return s
 	}
 	oldLen := newLen - num
