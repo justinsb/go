@@ -380,6 +380,72 @@ exit 7.8% (freeing lines 4.4%, scanning the outer stack 1.8%),
 allocation 6.1% (the baseline's allocator is 7%), store check 3.3%,
 entry check 1.1%, typed-copy checks 1.1%.
 
+## Large live heaps, and the verdict
+
+The fourth round's profile left the balance of the design in the open:
+regions cost about 12% of CPU per request and save the collector's work,
+which at GOGC=100 with a small live heap is 4% of CPU. The collector's
+cost grows with the live heap, so the last measurement scales it up
+(`restwork/run5.sh`: 1 and 2 GB of pointerful ballast, a million
+requests per run, two runs each; `results/restwork-v5-summary.csv`).
+The "limit" rows run both servers at GOGC=off with GOMEMLIMIT set to the
+region server's peak heap of the GOGC=100 row with the same ballast,
+which is the "equal memory budget" comparison.
+
+| config | req/s | CPU us/req | GC CPU % | GC cycles | live MiB | peak heap MiB | abandoned % |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| base, 1 GB live, GOGC=100 | 52338 | 37.1 | 15.5 | 7 | 862 | 1612 | |
+| region, 1 GB live, GOGC=100 | 50020 | 39.0 | 5.8 | 3 | 919 | 1431 | 0.8 |
+| base, 1 GB live, limit 970 MiB | 25073 | 123.5 | 75.3 | 112 | 854 | 906 | |
+| region, 1 GB live, limit 970 MiB | 21155 | 141.5 | 65.7 | 106 | 912 | 1089 | 89.8 |
+| base, 2 GB live, GOGC=100 | 53086 | 38.5 | 19.4 | 5 | 1668 | 2846 | |
+| region, 2 GB live, GOGC=100 | 49524 | 40.2 | 6.6 | 2 | 1579 | 2136 | 0.0 |
+| base, 2 GB live, limit 1754 MiB | 21297 | 157.4 | 75.0 | 68 | 1666 | 1743 | |
+| region, 2 GB live, limit 1754 MiB | 18658 | 164.0 | 62.4 | 60 | 1778 | 2128 | 100.0 |
+
+With a large live heap at GOGC=100 the region server cuts GC CPU by two
+thirds (15.5% to 5.8%, 19.4% to 6.6%) and the peak heap by 11% and 25%,
+and is still 4 to 7% behind on throughput: subtracting the collector,
+the base server spends 31 us of CPU per request and the region server
+37, so the region's own overhead (about 6 us) exceeds what it saves the
+collector (3.5 to 5 us) even when the collector scans 2 GB per cycle.
+
+The equal-memory rows are the surprise, and they close the question.
+When the limit binds, the collector runs continuously, and a region that
+ends while a cycle is marking frees nothing: it pins its lines and leaves
+them to the sweep (the "abandoned" column, 90 to 100% here). Under memory
+pressure, regions therefore degrade to the collector's own reclamation
+plus their own overhead, and the region server is 15 to 20% behind. The
+lower peak heap in the GOGC=100 rows is real, but it cannot be cashed in:
+the moment a memory limit is set to exploit it, the mechanism that
+produced it stops working.
+
+**Verdict.** This is a negative result for per-request regions as a way to
+close the GC gap, and the reason is the collector: Go reclaims in bulk,
+amortized over thousands of requests, at a cost of 4% of CPU for a
+request-sized live heap and about 15 to 20% with a gigabyte or two of
+live pointers, while a region reclaims per request and pays for it on
+every request (freeing lines, scanning the stack above the region,
+propagating fades, the store check, 6 us here). The design was pushed
+as far as it reasonably goes: a bump allocator with 64 KB blocks and
+128-byte lines, placement inheritance for the allocators that resist
+escape analysis, the pool folded into the region, the store check
+elided on fresh objects and on live-region parameters, inline
+allocation, lazy fade propagation. The remaining per-request cost is
+structural, not an artifact. The one regime where regions are even on
+throughput, a large live heap at a generous GOGC, is one where they buy
+lower peak memory that cannot be converted into a tighter limit without
+the regime changing underneath them.
+
+What the exercise produced that stands on its own: the measurements
+above and the escape-sink analysis that preceded them (`README.md`),
+which say where a request's allocations go and why; the verifiers, which
+found two real bugs in the prototype (`regioncheck` and the pacer and
+finalizer bugs of the fourth round); and a clear statement of what a
+region design would need that this one does not have, a way to free
+memory while a cycle is marking, without which it cannot help under
+memory pressure.
+
 ## What is still open
 
 - The remaining escapes (six per thousand requests) are runtime-internal
@@ -410,6 +476,8 @@ cd doc/gc-gap
 python3 restwork/summarize.py results/restwork.jsonl
 ./restwork/run4.sh results/restwork-v4.jsonl 300000 64  # fourth round: three compilers
 python3 restwork/summarize.py results/restwork-v4.jsonl
+./restwork/run5.sh results/restwork-v5.jsonl 1000000 64 # large live heaps, memory limit
+python3 restwork/summarize.py results/restwork-v5.jsonl
 # fade profile
 GODEBUG=httpregion=1,regiontrace=1 /tmp/restwork-bin -serve 127.0.0.1:8080 -items 20000 -cache 5000 2> fades.txt &
 /tmp/restwork-bin -client http://127.0.0.1:8080 -items 20000 -cache 5000 -n 300000 -c 64
