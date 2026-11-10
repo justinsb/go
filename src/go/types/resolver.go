@@ -523,6 +523,10 @@ func (check *Checker) sortObjects() {
 func (check *Checker) unpackRecv(rtyp ast.Expr, unpackParams bool) (ptr bool, base ast.Expr, tparams []*ast.Ident) {
 	// unpack receiver type
 	base = ast.Unparen(rtyp)
+	if t, _ := base.(*ast.ConstType); t != nil {
+		// const receiver: const T or const *T
+		base = ast.Unparen(t.Elem)
+	}
 	if t, _ := base.(*ast.StarExpr); t != nil {
 		ptr = true
 		base = ast.Unparen(t.X)

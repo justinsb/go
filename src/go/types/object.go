@@ -468,6 +468,36 @@ func (obj *Func) Origin() *Func {
 // like method Error of the error built-in interface type.
 func (obj *Func) Pkg() *Package { return obj.object.Pkg() }
 
+// isConstMethod reports whether obj is a const method: a method with a
+// receiver of const type, or an interface method declared const.
+func (obj *Func) isConstMethod() bool {
+	sig, _ := obj.typ.(*Signature)
+	return sig != nil && sig.ConstMethod()
+}
+
+// isConstCallable reports whether the method obj may be invoked on a
+// const (read-only) receiver operand. This is the case for const methods,
+// and for methods with a non-pointer receiver of a value type (the method
+// operates on a fully independent copy of the receiver operand).
+func (obj *Func) isConstCallable() bool {
+	sig, _ := obj.typ.(*Signature)
+	if sig == nil {
+		return false
+	}
+	if sig.ConstMethod() {
+		return true
+	}
+	if sig.recv != nil && sig.recv.typ != nil {
+		if _, isIface := sig.recv.typ.Underlying().(*Interface); isIface {
+			return false
+		}
+		if _, isPtr := deref(sig.recv.typ); !isPtr {
+			return isValueType(sig.recv.typ)
+		}
+	}
+	return false
+}
+
 // hasPtrRecv reports whether the receiver is of the form *T for the given method obj.
 func (obj *Func) hasPtrRecv() bool {
 	// If a method's receiver type is set, use that as the source of truth for the receiver.

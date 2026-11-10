@@ -31,6 +31,7 @@ type Signature struct {
 	params   *Tuple         // (incoming) parameters from left to right; or nil
 	results  *Tuple         // (outgoing) results from left to right; or nil
 	variadic bool           // true if the last parameter's type is of the form ...T
+	constRcv bool           // if set, the signature is the signature of a const interface method
 
 	// If recvold is the sentinel value [methExpr], then recvold should
 	// instead be sourced from params[0]. Otherwise, recvold points to
@@ -79,7 +80,7 @@ func NewSignatureType(recv *Var, recvTypeParams, typeParams []*TypeParam, params
 		if n == 0 {
 			panic("variadic function must have at least one parameter")
 		}
-		last := params.At(n - 1).typ
+		last := unconst(params.At(n - 1).typ) // may be const []T for const ...T
 		var S *Slice
 		for t := range typeset(last) {
 			if t == nil {
@@ -134,6 +135,19 @@ func NewSignatureType(recv *Var, recvTypeParams, typeParams []*TypeParam, params
 // as a *[Named] or an *[Interface]. Due to embedding, an interface may
 // contain methods whose receiver type is a different interface.
 func (s *Signature) Recv() *Var { return s.recv }
+
+// ConstMethod reports whether s is the signature of a const method.
+// A const method is a method with a receiver of const type, or an
+// interface method declared with the const keyword. Const methods
+// may be invoked on const values.
+func (s *Signature) ConstMethod() bool {
+	return s.constRcv || s.recv != nil && isConst(s.recv.typ)
+}
+
+// SetConstMethod marks s as the signature of a const interface method
+// (or not). It must be called before the signature is used. It is not
+// needed for methods with a receiver of const type.
+func (s *Signature) SetConstMethod(isConst bool) { s.constRcv = isConst }
 
 // TypeParams returns the type parameters of signature s, or nil.
 func (s *Signature) TypeParams() *TypeParamList { return s.tparams }
@@ -317,6 +331,11 @@ func (check *Checker) collectRecv(rparam *ast.Field, scopePos token.Pos) (*Var, 
 				recvType = NewPointer(recvType)
 			}
 
+			// Reestablish constness if needed.
+			if _, ok := ast.Unparen(rparam.Type).(*ast.ConstType); ok && isValid(recvType) {
+				recvType = NewConstType(recvType)
+			}
+
 			check.recordParenthesizedRecvTypes(rparam.Type, recvType)
 		}
 	}
@@ -355,6 +374,7 @@ func (check *Checker) collectRecv(rparam *ast.Field, scopePos token.Pos) (*Var, 
 }
 
 func unpointer(t Type) Type {
+	t = unconst(t)
 	for {
 		p, _ := t.(*Pointer)
 		if p == nil {
@@ -380,6 +400,9 @@ func (check *Checker) recordParenthesizedRecvTypes(expr ast.Expr, typ Type) {
 		switch e := expr.(type) {
 		case *ast.ParenExpr:
 			expr = e.X
+		case *ast.ConstType:
+			expr = e.Elem
+			typ = unconst(typ)
 		case *ast.StarExpr:
 			expr = e.X
 			// In a correct program, typ must be an unnamed
@@ -405,8 +428,16 @@ func (check *Checker) collectParams(kind VarKind, list *ast.FieldList) (names []
 	}
 
 	var named, anonymous bool
+	constDots := false // if set, the variadic parameter is of the form const ...T
 	for i, field := range list.List {
 		ftype := field.Type
+		if c, _ := ftype.(*ast.ConstType); c != nil {
+			if t, _ := c.Elem.(*ast.Ellipsis); t != nil {
+				// const ...T
+				ftype = t
+				constDots = kind == ParamVar && i == len(list.List)-1 && len(field.Names) <= 1
+			}
+		}
 		if t, _ := ftype.(*ast.Ellipsis); t != nil {
 			ftype = t.Elt
 			if kind == ParamVar && i == len(list.List)-1 && len(field.Names) <= 1 {
@@ -453,6 +484,10 @@ func (check *Checker) collectParams(kind VarKind, list *ast.FieldList) (names []
 	if variadic {
 		last := params[len(params)-1]
 		last.typ = &Slice{elem: last.typ}
+		if constDots {
+			// For a const variadic parameter const ...T, the parameter type is const []T.
+			last.typ = constOf(last.typ)
+		}
 		check.recordTypeAndValue(list.List[len(list.List)-1].Type, typexpr, last.typ, nil)
 	}
 

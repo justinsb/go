@@ -519,6 +519,9 @@ func (t *Named) expandMethod(i int) *Func {
 	} else {
 		rtyp = t
 	}
+	if oldSig.recv != nil && isConst(oldSig.recv.typ) {
+		rtyp = NewConstType(rtyp) // const receiver
+	}
 
 	newSig.recv = cloneVar(oldSig.recv, rtyp)
 	newSig.rparams = nil

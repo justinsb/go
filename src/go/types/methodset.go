@@ -80,6 +80,12 @@ func NewMethodSet(T Type) *MethodSet {
 	// (spec: "The type denoted by T is called the receiver base type;
 	// it must not be a pointer or interface type and it must be declared
 	// in the same package as the method.").
+	// The method set of a const type const T consists of the
+	// methods of T that may be invoked on const values.
+	T0 := T
+	constT := isConst(T)
+	T = unconst(T)
+
 	if t := asNamed(T); t != nil && isPointer(t) {
 		return &emptyMethodSet
 	}
@@ -196,9 +202,17 @@ func NewMethodSet(T Type) *MethodSet {
 	var list []*Selection
 	for _, m := range base {
 		if m != nil {
-			m.recv = T
+			if constT {
+				if f, _ := m.obj.(*Func); f == nil || !f.isConstCallable() {
+					continue
+				}
+			}
+			m.recv = T0
 			list = append(list, m)
 		}
+	}
+	if len(list) == 0 {
+		return &emptyMethodSet
 	}
 	// sort by unique name
 	sort.Slice(list, func(i, j int) bool {

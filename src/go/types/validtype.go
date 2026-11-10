@@ -52,6 +52,9 @@ func (check *Checker) validType0(pos token.Pos, typ Type, nest, path []*Named) b
 	case *Array:
 		return check.validType0(pos, t.elem, nest, path)
 
+	case *ConstType:
+		return check.validType0(pos, t.elem, nest, path)
+
 	case *Struct:
 		for _, f := range t.fields {
 			if !check.validType0(pos, f.typ, nest, path) {

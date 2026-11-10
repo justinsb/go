@@ -419,7 +419,7 @@ func combinesWithName(x ast.Expr) bool {
 // The result is false if x could be a type element OR an ordinary (value) expression.
 func isTypeElem(x ast.Expr) bool {
 	switch x := x.(type) {
-	case *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
+	case *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType, *ast.ConstType:
 		return true
 	case *ast.UnaryExpr:
 		return x.Op == token.TILDE
@@ -526,8 +526,15 @@ func (p *printer) fieldList(fields *ast.FieldList, isStruct, isIncomplete bool) 
 			} else { // interface
 				if len(f.Names) > 0 {
 					name := f.Names[0] // method name
+					ftyp := f.Type
+					if c, _ := ftyp.(*ast.ConstType); c != nil {
+						// const method
+						p.setPos(c.Const)
+						p.print(token.CONST, blank)
+						ftyp = c.Elem
+					}
 					p.expr(name)
-					p.signature(f.Type.(*ast.FuncType)) // don't print "func"
+					p.signature(ftyp.(*ast.FuncType)) // don't print "func"
 				} else {
 					// embedded interface
 					p.expr(f.Type)
@@ -619,8 +626,15 @@ func (p *printer) fieldList(fields *ast.FieldList, isStruct, isIncomplete bool) 
 			p.recordLine(&line)
 			if name != nil {
 				// method
+				ftyp := f.Type
+				if c, _ := ftyp.(*ast.ConstType); c != nil {
+					// const method
+					p.setPos(c.Const)
+					p.print(token.CONST, blank)
+					ftyp = c.Elem
+				}
 				p.expr(name)
-				p.signature(f.Type.(*ast.FuncType)) // don't print "func"
+				p.signature(ftyp.(*ast.FuncType)) // don't print "func"
 				prev = nil
 			} else {
 				// embedded interface
@@ -1063,6 +1077,11 @@ func (p *printer) expr1(expr ast.Expr, prec1, depth int) {
 		p.expr(x.Key)
 		p.print(token.RBRACK)
 		p.expr(x.Value)
+
+	case *ast.ConstType:
+		p.setPos(x.Const)
+		p.print(token.CONST, blank)
+		p.expr(x.Elem)
 
 	case *ast.ChanType:
 		switch x.Dir {

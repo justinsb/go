@@ -304,6 +304,13 @@ func (check *Checker) typInternal(e0 ast.Expr, def *TypeName) (T Type) {
 		}
 		// report error if we encountered [...]
 
+	case *ast.ConstType:
+		elem := check.varType(e.Elem)
+		if !isValid(elem) {
+			return Typ[Invalid]
+		}
+		return NewConstType(elem)
+
 	case *ast.Ellipsis:
 		// dots are handled explicitly where they are valid
 		check.error(e, InvalidSyntaxTree, "invalid use of ...")

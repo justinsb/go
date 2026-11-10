@@ -37,6 +37,19 @@ func (check *Checker) rangeStmt(inner stmtContext, rangeStmt *ast.RangeStmt, noN
 	check.hasCallOrRecv = false
 	check.expr(nil, &x, rangeVar)
 
+	// Ranging over a const (or otherwise read-only) array, slice, or map
+	// yields const views of the keys and elements.
+	ro := false
+	if x.isValid() && x.readonly() {
+		x.typ_ = unconst(x.typ())
+		if u, _ := commonUnder(x.typ(), nil); u != nil {
+			switch arrayPtrDeref(u).(type) {
+			case *Array, *Slice, *Map:
+				ro = true
+			}
+		}
+	}
+
 	if isTypes2 && x.isValid() && sValue == nil && !check.hasCallOrRecv {
 		if t, ok := arrayPtrDeref(x.typ().Underlying()).(*Array); ok {
 			for {
@@ -81,6 +94,14 @@ func (check *Checker) rangeStmt(inner stmtContext, rangeStmt *ast.RangeStmt, noN
 			check.softErrorf(sExtra, InvalidIterVar, "range clause permits at most two iteration variables")
 		}
 		key, val = k, v
+		if ro && ok {
+			if key != nil {
+				key = constView(key)
+			}
+			if val != nil {
+				val = constView(val)
+			}
+		}
 	}
 
 	// Open the for-statement block scope now, after the range clause.

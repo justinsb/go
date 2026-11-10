@@ -184,102 +184,102 @@ func ok(t const *T, cs const []*T, cm const map[string]*T, ci const I, s []int, 
 // --- invalid uses ---
 
 func bad(t const *T, cs const []*T, cm const map[string]*T, ci const I, s []int, mt *T) {
-	t.n = 1 // ERROR "read-only"
-	t.n++ // ERROR "read-only"
-	t.n += 2 // ERROR "read-only"
-	*t.p = 1 // ERROR "read-only"
-	t.s[0] = 1 // ERROR "read-only"
-	t.s = nil // ERROR "read-only"
-	t.arr[0] = 1 // ERROR "read-only"
-	t.arr = [4]int{} // ERROR "read-only"
-	*t.parr[0] = 1 // ERROR "read-only"
-	t.in.a = 1 // ERROR "read-only"
-	t.in.Set(1) // ERROR "non-const method"
-	t.in = Inner{} // ERROR "read-only"
-	t.m["x"] = nil // ERROR "read-only"
-	t.next.n = 1 // ERROR "read-only"
-	t.next.next.s[0] = 1 // ERROR "read-only"
-	t.SetN(1) // ERROR "non-const method"
-	_ = t.ByValue() // ERROR "non-const method"
-	cs[0] = nil // ERROR "read-only"
-	cs[0].n = 1 // ERROR "read-only"
-	cs[0].SetN(1) // ERROR "non-const method"
-	cm["x"] = nil // ERROR "read-only"
-	cm["x"].n = 1 // ERROR "read-only"
-	ci.SetN(1) // ERROR "non-const method"
-	var _ *T = t // ERROR "discards const"
-	var _ []*T = cs // ERROR "discards const"
-	var _ map[string]*T = cm // ERROR "discards const"
-	var _ I = ci // ERROR "discards const"
-	var _ any = t // ERROR "discards const"
-	var _ *int = &t.n // ERROR "discards const"
-	var _ *int = &t.s[0] // ERROR "discards const"
-	var _ *int = t.p // ERROR "read-only"
-	var _ []int = t.s // ERROR "read-only"
-	var _ []int = t.s[1:] // ERROR "discards const"
-	var _ []int = t.arr[:] // ERROR "discards const"
-	var _ *[4]int = &t.arr // ERROR "discards const"
-	var _ [2]*int = t.parr // ERROR "read-only"
-	var _ any = t.i // ERROR "read-only"
-	var _ const I = t // ERROR "is not a const method"
-	_ = []int(t.s) // ERROR "read-only"
-	_ = (*T)(t) // ERROR "discards const"
+	t /* ERROR "read-only" */.n = 1
+	t /* ERROR "read-only" */.n++
+	t /* ERROR "read-only" */.n += 2
+	* /* ERROR "read-only" */t.p = 1
+	t /* ERROR "read-only" */.s[0] = 1
+	t /* ERROR "read-only" */.s = nil
+	t /* ERROR "read-only" */.arr[0] = 1
+	t /* ERROR "read-only" */.arr = [4]int{}
+	* /* ERROR "read-only" */t.parr[0] = 1
+	t /* ERROR "read-only" */.in.a = 1
+	t.in.Set /* ERROR "non-const method" */(1)
+	t /* ERROR "read-only" */.in = Inner{}
+	t /* ERROR "read-only" */.m["x"] = nil
+	t /* ERROR "read-only" */.next.n = 1
+	t /* ERROR "read-only" */.next.next.s[0] = 1
+	t.SetN /* ERROR "non-const method" */(1)
+	_ = t.ByValue /* ERROR "non-const method" */()
+	cs /* ERROR "read-only" */[0] = nil
+	cs /* ERROR "read-only" */[0].n = 1
+	cs[0].SetN /* ERROR "non-const method" */(1)
+	cm /* ERROR "read-only" */["x"] = nil
+	cm /* ERROR "read-only" */["x"].n = 1
+	ci.SetN /* ERROR "non-const method" */(1)
+	var _ *T = t /* ERROR "discards const" */
+	var _ []*T = cs /* ERROR "discards const" */
+	var _ map[string]*T = cm /* ERROR "discards const" */
+	var _ I = ci /* ERROR "discards const" */
+	var _ any = t /* ERROR "discards const" */
+	var _ *int = & /* ERROR "discards const" */t.n
+	var _ *int = & /* ERROR "discards const" */t.s[0]
+	var _ *int = t /* ERROR "read-only" */.p
+	var _ []int = t /* ERROR "read-only" */.s
+	var _ []int = t /* ERROR "discards const" */.s[1:]
+	var _ []int = t /* ERROR "discards const" */.arr[:]
+	var _ *[4]int = & /* ERROR "discards const" */t.arr
+	var _ [2]*int = t /* ERROR "read-only" */.parr
+	var _ any = t /* ERROR "read-only" */.i
+	var _ const I = t /* ERROR "is not a const method" */
+	_ = []int(t /* ERROR "read-only" */.s)
+	_ = (*T)(t /* ERROR "discards const" */)
 	for _, x := range cs {
-		x.n = 1 // ERROR "read-only"
+		x /* ERROR "read-only" */.n = 1
 	}
 	for _, x := range cm {
-		x.SetN(1) // ERROR "non-const method"
+		x.SetN /* ERROR "non-const method" */(1)
 	}
 	for i := range t.s {
-		t.s[i] = 0 // ERROR "read-only"
+		t /* ERROR "read-only" */.s[i] = 0
 	}
-	for _, t.s[0] = range s { // ERROR "read-only"
+	for _, t /* ERROR "read-only" */.s[0] = range s {
 	}
-	t.s[0], t.n = 1, 2 /* ERROR "read-only" */ // ERROR "read-only"
+	t /* ERROR "read-only" */.s[0], t /* ERROR "read-only" */.n = 1, 2
 	p := &t.n
-	*p = 1 // ERROR "read-only"
+	* /* ERROR "read-only" */p = 1
 	q := t.next
-	q.n = 1 // ERROR "read-only"
+	q /* ERROR "read-only" */.n = 1
 	if x, ok := ci.(*T); ok {
-		x.n = 1 // ERROR "read-only"
+		x /* ERROR "read-only" */.n = 1
 	}
 	switch x := ci.(type) {
 	case *T:
-		x.n = 1 // ERROR "read-only"
+		x /* ERROR "read-only" */.n = 1
 	case I:
-		x.SetN(1) // ERROR "non-const method"
+		x.SetN /* ERROR "non-const method" */(1)
 	}
-	_ = append(t.s, 1) // ERROR "read-only"
-	copy(t.s, s) // ERROR "read-only"
-	clear(t.s) // ERROR "read-only"
-	clear(cm) // ERROR "cannot clear const"
-	delete(cm, "x") // ERROR "cannot delete from const"
+	_ = append(t /* ERROR "read-only" */.s, 1)
+	copy(t /* ERROR "read-only" */.s, s)
+	clear(t /* ERROR "read-only" */.s)
+	clear(cm /* ERROR "cannot clear const" */)
+	delete(cm /* ERROR "cannot delete from const" */, "x")
 	dst := make([]*T, 3)
-	copy(dst, cs) // ERROR "discards const"
-	dst = append(dst, cs...) // ERROR "discards const"
-	dst = append(dst, cs[0]) // ERROR "read-only"
-	fn := t.SetN // ERROR "non-const method"
+	copy(dst, cs /* ERROR "discards const" */)
+	dst = append(dst, cs /* ERROR "discards const" */...)
+	dst = append(dst, cs /* ERROR "read-only" */[0])
+	fn := t.SetN /* ERROR "non-const method" */
 	_ = fn
-	_ = (const *T).SetN // ERROR "non-const method"
-	_ = Id(t).SetN // ERROR "non-const method"
+	_ = (const *T).SetN /* ERROR "non-const method" */
+	_ = Id(t).SetN /* ERROR "non-const method" */
 	g := &G[*T]{}
 	var cg const *G[*T] = g
-	cg.Add(nil) // ERROR "non-const method"
-	cg.At(0).n = 1 // ERROR "read-only"
-	g.At(0).n = 1 // ERROR "read-only"
-	func() { t.n = 1 }() // ERROR "read-only"
+	cg.Add /* ERROR "non-const method" */(nil)
+	cg /* ERROR "read-only" */.At(0).n = 1
+	g /* ERROR "read-only" */.At(0).n = 1
+	func() { t /* ERROR "read-only" */.n = 1 }()
 	type S struct{ cfg const *T }
 	sv := S{cfg: t}
-	sv.cfg.n = 1 // ERROR "read-only"
+	sv /* ERROR "read-only" */.cfg.n = 1
 	var pp *const *T = &t
-	(*pp).n = 1 // ERROR "read-only"
-	var _ **T = pp // ERROR "cannot use"
-	var _ *const *T = &mt // ERROR "cannot use"
-	var _ []const *T = dst // ERROR "cannot use"
+	( /* ERROR "read-only" */*pp).n = 1
+	var _ **T = pp /* ERROR "cannot use" */
+	var _ *const *T = & /* ERROR "cannot use" */mt
+	var _ []const *T = dst /* ERROR "cannot use" */
 	var _ func(*T) = func(const *T) {}
 }
 
-type Bad1 const []int // ERROR "const type as RHS"
+type Bad1 const /* ERROR "const type as RHS" */ []int
 
 type J interface{ const N() int }
 
@@ -287,23 +287,22 @@ type NotConst struct{}
 
 func (*NotConst) N() int { return 0 }
 
-var _ J = &NotConst{} // ERROR "is not a const method"
+var _ J = & /* ERROR "is not a const method" */NotConst{}
 var _ J = (*T)(nil)
 
 type X struct{ p *int }
 
 func (x const X) M() {
-	*x.p = 1 // ERROR "read-only"
+	* /* ERROR "read-only" */x.p = 1
 }
 func (x X) V() {}
 
 func xx(x const X) {
-	x.V() // ERROR "non-const method"
+	x.V /* ERROR "non-const method" */()
 	x.M()
 	x = X{}
-	x.p = nil // ERROR "read-only"
+	x /* ERROR "read-only" */.p = nil
 }
-
 
 // --- const-compatible signatures and const variadic parameters ---
 
@@ -352,12 +351,12 @@ func (impl) M(p const *T) []int { return nil }
 var _ RI = impl{}
 
 func qbad(t const *T, args const ...any) {
-	args[0] = 1 // ERROR "read-only"
-	wrap("x", args...) // ERROR "discards const"
-	wrap("x", t) // ERROR "discards const"
-	var _ func(const *T) = func(*T) {} // ERROR "cannot use"
-	var _ func() *T = func() const *T { return nil } // ERROR "cannot use"
-	var _ []any = args // ERROR "discards const"
+	args /* ERROR "read-only" */[0] = 1
+	wrap("x", args /* ERROR "discards const" */...)
+	wrap("x", t /* ERROR "discards const" */)
+	var _ func(const *T) = func /* ERROR "cannot use" */(*T) {}
+	var _ func() *T = func /* ERROR "cannot use" */() const *T { return nil }
+	var _ []any = args /* ERROR "discards const" */
 }
 
 type RI2 interface{ M(p const *T) []int }
@@ -365,13 +364,12 @@ type impl2 struct{}
 
 func (impl2) M(p *T) []int { return nil }
 
-var _ RI2 = impl2{} // ERROR "wrong type for method"
+var _ RI2 = impl2 /* ERROR "wrong type for method" */{}
 
 type impl3 struct{}
 
 func (impl3) M(p const *T) const []int { return nil }
 
-var _ RI2 = impl3{} // ERROR "wrong type for method"
+var _ RI2 = impl3 /* ERROR "wrong type for method" */{}
 
-func dots(a const ...int, b int) {} // ERROR "can only use ... with final parameter"
-
+func dots(a const ... /* ERROR "can only use ... with final parameter" */int, b int) {}

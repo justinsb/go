@@ -406,7 +406,7 @@ func (tv TypeAndValue) IsBuiltin() bool {
 // nil Value.
 func (tv TypeAndValue) IsValue() bool {
 	switch tv.mode {
-	case constant_, variable, mapindex, value, commaok, commaerr:
+	case constant_, variable, mapindex, value, commaok, commaerr, rovariable:
 		return true
 	}
 	return false
@@ -421,7 +421,7 @@ func (tv TypeAndValue) IsNil() bool {
 // Addressable reports whether the corresponding expression
 // is addressable (https://golang.org/ref/spec#Address_operators).
 func (tv TypeAndValue) Addressable() bool {
-	return tv.mode == variable
+	return tv.mode == variable || tv.mode == rovariable
 }
 
 // Assignable reports whether the corresponding expression

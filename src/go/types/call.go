@@ -423,7 +423,7 @@ func (check *Checker) genericExprList(elist []ast.Expr) (resList []*operand, tar
 				// x is a function call returning multiple values; it cannot be generic.
 				resList = make([]*operand, t.Len())
 				for i, v := range t.vars {
-					resList[i] = &operand{mode_: value, expr: e, typ_: v.typ}
+					resList[i] = &operand{mode_: value, expr: e, typ_: eraseValueConst(v.typ)}
 				}
 			} else {
 				// x is exactly one value (possibly invalid or uninstantiated generic function).
@@ -507,7 +507,12 @@ func (check *Checker) arguments(call *ast.CallExpr, sig *Signature, targs []Type
 				vars := make([]*Var, npars-1) // npars > 0 for variadic functions
 				copy(vars, sig.params.vars)
 				last := sig.params.vars[npars-1]
-				typ := last.typ.(*Slice).elem
+				// For a const variadic parameter (const ...T) the parameter
+				// type is const []T and the arguments must be assignable to const T.
+				typ := unconst(last.typ).(*Slice).elem
+				if isConst(last.typ) {
+					typ = NewConstType(typ)
+				}
 				for len(vars) < nargs {
 					vars = append(vars, NewParam(last.pos, last.pkg, last.name, typ))
 				}
@@ -825,7 +830,7 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 		goto Error
 	}
 
-	obj, index, indirect = lookupFieldOrMethod(x.typ(), x.mode() == variable, check.pkg, sel, false)
+	obj, index, indirect = lookupFieldOrMethod(x.typ(), x.addressable(), check.pkg, sel, false)
 	if obj == nil {
 		// Don't report another error if the underlying type was invalid (go.dev/issue/49541).
 		if !isValid(x.typ().Underlying()) {
@@ -851,7 +856,7 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 		if isInterfacePtr(x.typ()) {
 			why = check.interfacePtrError(x.typ())
 		} else {
-			alt, _, _ := lookupFieldOrMethod(x.typ(), x.mode() == variable, check.pkg, sel, true)
+			alt, _, _ := lookupFieldOrMethod(x.typ(), x.addressable(), check.pkg, sel, true)
 			why = check.lookupError(x.typ(), sel, alt, false)
 		}
 		check.errorf(e.Sel, MissingFieldOrMethod, "%s.%s undefined (%s)", x.expr, sel, why)
@@ -868,17 +873,32 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 
 		// field value
 		check.recordSelection(e, FieldVal, x.typ(), obj, index, indirect)
-		if x.mode() == variable || indirect {
+		// A field selected through a const (or otherwise read-only)
+		// operand is read-only and has a const view of the field type.
+		ro := x.readonly()
+		if x.addressable() || indirect {
 			x.mode_ = variable
+			if ro {
+				x.mode_ = rovariable
+			}
 		} else {
 			x.mode_ = value
 		}
 		x.typ_ = obj.typ
+		if ro {
+			x.typ_ = constView(obj.typ)
+		}
 
 	case *Func:
 		check.objDecl(obj) // ensure fully set-up signature
 		check.addDeclDep(obj)
 		// TODO(mark): Assert that sig.rparams is nil here?
+
+		// Only const methods may be selected through a const (or otherwise read-only) operand.
+		if (x.mode() == typexpr && isConst(x.typ()) || x.mode() != typexpr && x.readonly()) && !obj.isConstCallable() {
+			check.errorf(e.Sel, InvalidMethodExpr, "cannot call non-const method %s on const value %s", sel, x.expr)
+			goto Error
+		}
 
 		if x.mode() == typexpr {
 			// method expression
@@ -910,7 +930,12 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 					name = "_"
 				}
 			}
-			params = append([]*Var{NewParam(sig.recv.pos, sig.recv.pkg, name, x.typ())}, params...)
+			// For a const method, the receiver argument may be a const value.
+			recvTyp := x.typ()
+			if obj.isConstMethod() {
+				recvTyp = NewConstType(recvTyp)
+			}
+			params = append([]*Var{NewParam(sig.recv.pos, sig.recv.pkg, name, recvTyp)}, params...)
 			x.mode_ = value
 			x.typ_ = &Signature{
 				tparams:  sig.tparams,
@@ -939,8 +964,8 @@ func (check *Checker) selector(x *operand, e *ast.SelectorExpr, wantType bool) {
 				// _before_ calling NewMethodSet: LookupFieldOrMethod completes
 				// any incomplete interfaces so they are available to NewMethodSet
 				// (which assumes that interfaces have been completed already).
-				typ := x.typ_
-				if x.mode() == variable {
+				typ := unconst(x.typ_)
+				if x.addressable() {
 					// If typ is not an (unnamed) pointer or an interface,
 					// use *typ instead, because the method set of *typ
 					// includes the methods of typ.

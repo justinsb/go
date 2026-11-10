@@ -548,6 +548,9 @@ func (r *resolver) walkRecv(recv *ast.FieldList) {
 		return // nothing to do
 	}
 	typ := recv.List[0].Type
+	if c, ok := typ.(*ast.ConstType); ok {
+		typ = c.Elem // const receiver
+	}
 	if ptr, ok := typ.(*ast.StarExpr); ok {
 		typ = ptr.X
 	}

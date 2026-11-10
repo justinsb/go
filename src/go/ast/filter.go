@@ -178,6 +178,8 @@ func filterType(typ Expr, f Filter, export bool) bool {
 		return b1 || b2
 	case *ChanType:
 		return filterType(t.Value, f, export)
+	case *ConstType:
+		return filterType(t.Elem, f, export)
 	}
 	return false
 }

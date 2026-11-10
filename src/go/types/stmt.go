@@ -322,7 +322,8 @@ L:
 		// look for duplicate types
 		// (quadratic algorithm, but type switches tend to be reasonably small)
 		for t, other := range seen {
-			if T == nil && t == nil || T != nil && t != nil && Identical(T, t) {
+			// Const qualifiers don't matter for the dynamic type of a value.
+			if T == nil && t == nil || T != nil && t != nil && identicalIgnoreConst(T, t) {
 				// talk about "case" rather than "type" because of nil case
 				Ts := "nil"
 				if T != nil {
@@ -337,7 +338,7 @@ L:
 		}
 		seen[T] = e
 		if x != nil && T != nil {
-			check.typeAssertion(e, x, T, true)
+			check.typeAssertion(e, x, unconst(T), true)
 		}
 	}
 
@@ -725,10 +726,14 @@ func (check *Checker) stmt(ctxt stmtContext, s ast.Stmt) {
 		}
 
 		var sx *operand // switch expression against which cases are compared against; nil if invalid
+		ro := false     // if set, the switch expression is a const interface value
 		{
 			var x operand
 			check.expr(nil, &x, expr.X)
 			if x.isValid() {
+				// A type switch on a const interface value yields const values.
+				ro = x.readonly()
+				x.typ_ = unconst(x.typ())
 				if isTypeParam(x.typ()) {
 					check.errorf(&x, InvalidTypeSwitch, "cannot use type switch on type parameter value %s", &x)
 				} else if IsInterface(x.typ()) {
@@ -751,6 +756,9 @@ func (check *Checker) stmt(ctxt stmtContext, s ast.Stmt) {
 			}
 			// Check each type in this type switch case.
 			T := check.caseTypes(sx, clause.List, seen)
+			if ro {
+				T = constView(T)
+			}
 			check.openScope(clause, "case")
 			// If lhs exists, declare a corresponding variable in the case-local scope.
 			if lhs != nil {

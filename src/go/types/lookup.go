@@ -95,6 +95,10 @@ func LookupFieldOrMethod(T Type, addressable bool, pkg *Package, name string) (o
 // lookupFieldOrMethod is like LookupFieldOrMethod but with the additional foldCase parameter
 // (see Object.sameId for the meaning of foldCase).
 func lookupFieldOrMethod(T Type, addressable bool, pkg *Package, name string, foldCase bool) (obj Object, index []int, indirect bool) {
+	// Const qualifiers don't affect lookup: it is up to the caller to
+	// restrict the use of the result if T is a const type.
+	T = unconst(T)
+
 	// Methods cannot be associated to a named pointer type.
 	// (spec: "The type denoted by T is called the receiver base type;
 	// it must not be a pointer or interface type and it must be declared
@@ -394,7 +398,26 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 		ptrRecv
 		field
 		nointerface
+		notConst
 	)
+
+	// If V is a const type, only its const methods are available.
+	// A const method of T can only be implemented by a const method.
+	constV := isConst(V)
+	V = unconst(V)
+
+	// sameSig reports whether method f (of V) has a signature suitable
+	// for implementing method m (of T): the signatures must be equivalent,
+	// or f's signature must be usable in place of m's signature because
+	// they differ only in const qualifiers (see constCompatible).
+	sameSig := func(f, m *Func) bool {
+		if equivalent(f.typ, m.typ) {
+			return true
+		}
+		fs, _ := f.typ.(*Signature)
+		ms, _ := m.typ.(*Signature)
+		return constCompatible(fs, ms) || !static && constCompatible(ms, fs)
+	}
 
 	state := ok
 	var m *Func // method on T we're trying to implement
@@ -413,8 +436,13 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 				break
 			}
 
-			if !equivalent(f.typ, m.typ) {
+			if !sameSig(f, m) {
 				state = wrongSig
+				break
+			}
+
+			if (constV || m.isConstMethod()) && !f.isConstCallable() {
+				state = notConst
 				break
 			}
 		}
@@ -462,8 +490,13 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 				break
 			}
 
-			if !equivalent(f.typ, m.typ) {
+			if !sameSig(f, m) {
 				state = wrongSig
+				break
+			}
+
+			if (constV || m.isConstMethod()) && !f.isConstCallable() {
+				state = notConst
 				break
 			}
 		}
@@ -523,12 +556,14 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 			*cause = check.sprintf("(%s.%s is a field, not a method)", V, m.Name())
 		case nointerface:
 			*cause = check.sprintf("(%s method is marked 'nointerface')", m.Name())
+		case notConst:
+			*cause = check.sprintf("(method %s is not a const method)", m.Name())
 		default:
 			panic("unreachable")
 		}
 	}
 
-	return m, state == wrongSig || state == ptrRecv
+	return m, state == wrongSig || state == ptrRecv || state == notConst
 }
 
 // hasAllMethods is similar to checkMissingMethod but instead reports whether all methods are present.
@@ -626,7 +661,11 @@ func (check *Checker) newAssertableTo(V, T Type, cause *string) bool {
 // deref dereferences typ if it is a *Pointer (but not a *Named type
 // with an underlying pointer type!) and returns its base and true.
 // Otherwise it returns (typ, false).
+//
+// Const qualifiers are ignored: if typ is a const type, deref
+// operates on (and returns) its element type.
 func deref(typ Type) (Type, bool) {
+	typ = unconst(typ)
 	if p, _ := Unalias(typ).(*Pointer); p != nil {
 		// p.base should never be nil, but be conservative
 		if p.base == nil {
@@ -643,6 +682,7 @@ func deref(typ Type) (Type, bool) {
 // derefStructPtr dereferences typ if it is a (named or unnamed) pointer to a
 // (named or unnamed) struct and returns its base. Otherwise it returns typ.
 func derefStructPtr(typ Type) Type {
+	typ = unconst(typ)
 	if p, _ := typ.Underlying().(*Pointer); p != nil {
 		if _, ok := p.base.Underlying().(*Struct); ok {
 			return p.base

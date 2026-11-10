@@ -203,6 +203,8 @@ func (r *reader) filterType(parent *namedType, typ ast.Expr) {
 		r.filterType(nil, t.Value)
 	case *ast.ChanType:
 		r.filterType(nil, t.Value)
+	case *ast.ConstType:
+		r.filterType(parent, t.Elem)
 	}
 }
 

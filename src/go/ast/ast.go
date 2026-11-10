@@ -208,6 +208,12 @@ type Field struct {
 
 func (f *Field) Pos() token.Pos {
 	if len(f.Names) > 0 {
+		// A const interface method starts with the const keyword.
+		if c, _ := f.Type.(*ConstType); c != nil && c.Const.IsValid() {
+			if _, isMethod := c.Elem.(*FuncType); isMethod {
+				return c.Const
+			}
+		}
 		return f.Names[0].Pos()
 	}
 	if f.Type != nil {
@@ -481,6 +487,22 @@ type (
 		Value Expr
 	}
 
+	// A ConstType node represents a const type: const Elem.
+	//
+	// A const type is a deeply read-only view of its element type.
+	//
+	// A ConstType node is also used in two special cases:
+	//   - as the Type of an interface method [Field], in which case Elem
+	//     is the method's *[FuncType] and the method is a const method
+	//     (a method that may be called on a const interface value);
+	//   - as the Type of a final parameter [Field], in which case Elem
+	//     may be an *[Ellipsis] node, denoting a const variadic parameter
+	//     (const ...T).
+	ConstType struct {
+		Const token.Pos // position of "const" keyword
+		Elem  Expr      // element type
+	}
+
 	// A ChanType node represents a channel type.
 	ChanType struct {
 		Begin token.Pos // position of "chan" keyword or "<-" (whichever comes first)
@@ -524,6 +546,7 @@ func (x *FuncType) Pos() token.Pos {
 }
 func (x *InterfaceType) Pos() token.Pos { return x.Interface }
 func (x *MapType) Pos() token.Pos       { return x.Map }
+func (x *ConstType) Pos() token.Pos     { return x.Const }
 func (x *ChanType) Pos() token.Pos      { return x.Begin }
 
 func (x *BadExpr) End() token.Pos { return x.To }
@@ -566,6 +589,7 @@ func (x *FuncType) End() token.Pos {
 }
 func (x *InterfaceType) End() token.Pos { return x.Methods.End() }
 func (x *MapType) End() token.Pos       { return x.Value.End() }
+func (x *ConstType) End() token.Pos     { return x.Elem.End() }
 func (x *ChanType) End() token.Pos      { return x.Value.End() }
 
 // exprNode() ensures that only expression/type nodes can be
@@ -593,6 +617,7 @@ func (*StructType) exprNode()    {}
 func (*FuncType) exprNode()      {}
 func (*InterfaceType) exprNode() {}
 func (*MapType) exprNode()       {}
+func (*ConstType) exprNode()     {}
 func (*ChanType) exprNode()      {}
 
 // ----------------------------------------------------------------------------

@@ -579,6 +579,13 @@ func (check *Checker) typeDecl(obj *TypeName, tdecl *ast.TypeSpec) {
 		check.error(tdecl.Type, MisplacedTypeParam, "cannot use a type parameter as RHS in type declaration")
 		named.fromRHS = Typ[Invalid]
 	}
+
+	// A defined type cannot have a const type as underlying type.
+	// (Use an alias declaration instead.)
+	if isConst(rhs) {
+		check.error(tdecl.Type, BadDecl, "cannot use a const type as RHS in type definition (use an alias declaration)")
+		named.fromRHS = Typ[Invalid]
+	}
 }
 
 func (check *Checker) collectTypeParams(dst **TypeParamList, list *ast.FieldList) {

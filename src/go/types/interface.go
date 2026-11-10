@@ -179,7 +179,14 @@ func (check *Checker) interfaceType(ityp *Interface, iface *ast.InterfaceType, d
 			continue // ignore
 		}
 
-		typ := check.typ(f.Type)
+		// A const method is represented by a ConstType wrapping the method signature.
+		ftyp := f.Type
+		ctyp, _ := ftyp.(*ast.ConstType)
+		if ctyp != nil {
+			ftyp = ctyp.Elem
+		}
+
+		typ := check.typ(ftyp)
 		sig, _ := typ.(*Signature)
 		if sig == nil {
 			if isValid(typ) {
@@ -191,8 +198,8 @@ func (check *Checker) interfaceType(ityp *Interface, iface *ast.InterfaceType, d
 		// The go/parser doesn't accept interface method type parameters but an ast.FuncType may have them.
 		if sig.tparams != nil {
 			var at positioner = f.Type
-			if ftyp, _ := f.Type.(*ast.FuncType); ftyp != nil && ftyp.TypeParams != nil {
-				at = ftyp.TypeParams
+			if ft, _ := ftyp.(*ast.FuncType); ft != nil && ft.TypeParams != nil {
+				at = ft.TypeParams
 			}
 			check.error(at, InvalidSyntaxTree, "interface methods cannot have type parameters")
 		}
@@ -205,6 +212,7 @@ func (check *Checker) interfaceType(ityp *Interface, iface *ast.InterfaceType, d
 			}
 		}
 		sig.recv = newVar(RecvVar, name.Pos(), check.pkg, "", recvTyp)
+		sig.constRcv = ctyp != nil
 
 		m := NewFunc(name.Pos(), check.pkg, name.Name, sig)
 		check.recordDef(name, m)

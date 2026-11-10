@@ -581,6 +581,9 @@ func (w *tpWalker) isParameterized(typ Type) (res bool) {
 	case *Slice:
 		return w.isParameterized(t.elem)
 
+	case *ConstType:
+		return w.isParameterized(t.elem)
+
 	case *Struct:
 		return w.varList(t.fields)
 
@@ -735,6 +738,9 @@ func (w *cycleFinder) typ(typ Type) {
 		w.typ(t.elem)
 
 	case *Slice:
+		w.typ(t.elem)
+
+	case *ConstType:
 		w.typ(t.elem)
 
 	case *Struct:

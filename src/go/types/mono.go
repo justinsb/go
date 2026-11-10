@@ -231,6 +231,8 @@ func (w *monoGraph) assign(pkg *Package, pos token.Pos, tpar *TypeParam, targ Ty
 
 		case *Array:
 			do(typ.Elem())
+		case *ConstType:
+			do(typ.Elem())
 		case *Basic:
 			// ok
 		case *Chan:

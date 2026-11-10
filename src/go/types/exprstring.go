@@ -152,6 +152,10 @@ func WriteExpr(buf *bytes.Buffer, x ast.Expr) {
 		buf.WriteByte(']')
 		WriteExpr(buf, x.Value)
 
+	case *ast.ConstType:
+		buf.WriteString("const ")
+		WriteExpr(buf, x.Elem)
+
 	case *ast.ChanType:
 		var s string
 		switch x.Dir {
@@ -198,11 +202,20 @@ func writeFieldList(buf *bytes.Buffer, list []*ast.Field, sep string, iface bool
 			buf.WriteString(sep)
 		}
 
+		// const interface methods
+		ftyp := f.Type
+		if c, _ := ftyp.(*ast.ConstType); c != nil && iface {
+			if sig, _ := c.Elem.(*ast.FuncType); sig != nil {
+				buf.WriteString("const ")
+				ftyp = sig
+			}
+		}
+
 		// field list names
 		writeIdentList(buf, f.Names)
 
 		// types of interface methods consist of signatures only
-		if sig, _ := f.Type.(*ast.FuncType); sig != nil && iface {
+		if sig, _ := ftyp.(*ast.FuncType); sig != nil && iface {
 			writeSigExpr(buf, sig)
 			continue
 		}

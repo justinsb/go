@@ -137,9 +137,15 @@ func (check *Checker) unary(x *operand, e *ast.UnaryExpr) {
 	case token.AND:
 		// spec: "As an exception to the addressability
 		// requirement x may also be a composite literal."
-		if _, ok := ast.Unparen(e.X).(*ast.CompositeLit); !ok && x.mode() != variable {
+		if _, ok := ast.Unparen(e.X).(*ast.CompositeLit); !ok && !x.addressable() {
 			check.errorf(x, UnaddressableOperand, invalidOp+"cannot take address of %s", x)
 			x.invalidate()
+			return
+		}
+		if x.mode() == rovariable {
+			// The address of a read-only location is a const pointer.
+			x.mode_ = value
+			x.typ_ = NewConstType(&Pointer{base: unconst(x.typ())})
 			return
 		}
 		x.mode_ = value
@@ -279,7 +285,8 @@ func (check *Checker) updateExprType(x ast.Expr, typ Type, final bool) {
 		*ast.FuncType,
 		*ast.InterfaceType,
 		*ast.MapType,
-		*ast.ChanType:
+		*ast.ChanType,
+		*ast.ConstType:
 		// These expression are never untyped - nothing to do.
 		// The respective sub-expressions got their final types
 		// upon assignment or use.
@@ -398,6 +405,9 @@ func (check *Checker) implicitTypeAndValue(x *operand, target Type) (Type, const
 		}
 		return nil, nil, InvalidUntypedConversion
 	}
+
+	// An untyped value converts to a const type like it converts to its element type.
+	target = unconst(target)
 
 	switch u := target.Underlying().(type) {
 	case *Basic:
@@ -984,6 +994,12 @@ func (check *Checker) rawExpr(T *target, x *operand, e ast.Expr, hint Type, allo
 
 	kind := check.exprInternal(T, x, e, hint)
 
+	// A value of type const T where T is a value type is simply a value of type T.
+	switch x.mode() {
+	case constant_, variable, rovariable, mapindex, value, commaok, commaerr:
+		x.typ_ = eraseValueConst(x.typ())
+	}
+
 	if !allowGeneric {
 		check.nonGeneric(T, x)
 	}
@@ -1100,6 +1116,9 @@ func (check *Checker) exprInternal(T *target, x *operand, e ast.Expr, hint Type)
 			check.error(e, BadTypeKeyword, "use of .(type) outside type switch")
 			goto Error
 		}
+		// A type assertion on a const interface value yields a const value.
+		ro := x.readonly()
+		x.typ_ = unconst(x.typ())
 		if isTypeParam(x.typ()) {
 			check.errorf(x, InvalidAssert, invalidOp+"cannot use type assertion on type parameter value %s", x)
 			goto Error
@@ -1116,9 +1135,13 @@ func (check *Checker) exprInternal(T *target, x *operand, e ast.Expr, hint Type)
 		if !check.isComplete(T) {
 			goto Error
 		}
-		check.typeAssertion(e, x, T, false)
+		// Const qualifiers don't matter for the dynamic type of a value.
+		check.typeAssertion(e, x, unconst(T), false)
 		x.mode_ = commaok
 		x.typ_ = T
+		if ro {
+			x.typ_ = constView(T)
+		}
 
 	case *ast.CallExpr:
 		return check.callExpr(x, e)
@@ -1132,6 +1155,9 @@ func (check *Checker) exprInternal(T *target, x *operand, e ast.Expr, hint Type)
 			check.validVarType(e.X, x.typ())
 			x.typ_ = &Pointer{base: x.typ()}
 		default:
+			// Indirection through a const pointer yields a read-only variable.
+			ro := x.readonly()
+			x.typ_ = unconst(x.typ())
 			var base Type
 			if !underIs(x.typ(), func(u Type) bool {
 				p, _ := u.(*Pointer)
@@ -1154,6 +1180,10 @@ func (check *Checker) exprInternal(T *target, x *operand, e ast.Expr, hint Type)
 			}
 			x.mode_ = variable
 			x.typ_ = base
+			if ro {
+				x.mode_ = rovariable
+				x.typ_ = constView(base)
+			}
 		}
 
 	case *ast.UnaryExpr:
@@ -1178,7 +1208,7 @@ func (check *Checker) exprInternal(T *target, x *operand, e ast.Expr, hint Type)
 		goto Error
 
 	case *ast.ArrayType, *ast.StructType, *ast.FuncType,
-		*ast.InterfaceType, *ast.MapType, *ast.ChanType:
+		*ast.InterfaceType, *ast.MapType, *ast.ChanType, *ast.ConstType:
 		x.mode_ = typexpr
 		x.typ_ = check.typ(e)
 		// Note: rawExpr (caller of exprInternal) will call check.recordTypeAndValue
@@ -1293,7 +1323,7 @@ func (check *Checker) multiExpr(e ast.Expr, allowCommaOk bool) (list []*operand,
 			// create a dummy expression (in place of e) for better error messages
 			dummy := ast.NewIdent(nth(i+1, "function result"))
 			dummy.NamePos = e.Pos() // fix position
-			list[i] = &operand{mode_: value, expr: dummy, typ_: v.typ}
+			list[i] = &operand{mode_: value, expr: dummy, typ_: eraseValueConst(v.typ)}
 		}
 		return
 	}

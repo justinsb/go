@@ -20,6 +20,9 @@ import (
 func (check *Checker) conversion(x *operand, T Type) {
 	constArg := x.mode() == constant_
 
+	// A conversion to const T where T is a value type is a conversion to T.
+	T = eraseValueConst(T)
+
 	constConvertibleTo := func(T Type, val *constant.Value) bool {
 		switch t, _ := T.Underlying().(*Basic); {
 		case t == nil:
@@ -140,6 +143,32 @@ func (x *operand) convertibleTo(check *Checker, T Type, cause *string) bool {
 	// "x is assignable to T"
 	if ok, _ := x.assignableTo(check, T, cause); ok {
 		return true
+	}
+
+	// Const types: A conversion to a const type "const T1" is valid
+	// if the conversion to T1 is valid (ignoring the constness of x).
+	// A conversion of a const value to a non-const type is valid only
+	// if the result is a value type (and thus doesn't share anything
+	// with x that could be modified), or unsafe.Pointer.
+	if Tc, Vc := asConst(T), asConst(x.typ()); Tc != nil || Vc != nil {
+		y := *x
+		y.typ_ = unconst(x.typ())
+		if Tc != nil {
+			if cause != nil {
+				*cause = ""
+			}
+			return y.convertibleTo(check, Tc.elem, cause)
+		}
+		if !isValueType(T) {
+			if cause != nil {
+				*cause = "discards const qualifier"
+			}
+			return false
+		}
+		if cause != nil {
+			*cause = ""
+		}
+		return y.convertibleTo(check, T, cause)
 	}
 
 	origT := T

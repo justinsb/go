@@ -30,7 +30,7 @@ func (check *Checker) assignment(x *operand, T Type, context string) {
 	case nilvalue:
 		assert(isTypes2)
 		// ok
-	case constant_, variable, mapindex, value, commaok, commaerr:
+	case constant_, variable, mapindex, value, commaok, commaerr, rovariable:
 		// ok
 	default:
 		// we may get here because of other problems (go.dev/issue/39634, crash 12)
@@ -54,11 +54,11 @@ func (check *Checker) assignment(x *operand, T Type, context string) {
 					x.invalidate()
 					return
 				}
-			} else if T == nil || isNonTypeParamInterface(T) {
+			} else if T == nil || isNonTypeParamInterface(unconst(T)) {
 				target = Default(x.typ())
 			}
 		} else { // go/types
-			if T == nil || isNonTypeParamInterface(T) {
+			if T == nil || isNonTypeParamInterface(unconst(T)) {
 				if T == nil && x.typ() == Typ[UntypedNil] {
 					check.errorf(x, UntypedNilUse, "use of untyped nil in %s", context)
 					x.invalidate()
@@ -229,7 +229,15 @@ func (check *Checker) lhsVar(lhs ast.Expr) Type {
 		return Typ[Invalid]
 	case variable, mapindex:
 		// ok
+	case rovariable:
+		check.errorf(&x, UnassignableOperand, "cannot assign to %s (read-only: accessed through const value)", x.expr)
+		return Typ[Invalid]
 	default:
+		if _, ok := x.expr.(*ast.IndexExpr); ok && x.mode() == commaok {
+			// index expression of a const map
+			check.errorf(&x, UnassignableOperand, "cannot assign to %s (read-only: accessed through const value)", x.expr)
+			return Typ[Invalid]
+		}
 		if sel, ok := x.expr.(*ast.SelectorExpr); ok {
 			var op operand
 			check.expr(nil, &op, sel.X)
@@ -330,7 +338,7 @@ func (check *Checker) typesSummary(list []Type, variadic, hasDots bool) string {
 			switch {
 			case variadic:
 				// In correct code, the parameter type is a slice, but be careful.
-				if t, _ := t.(*Slice); t != nil {
+				if t, _ := unconst(t).(*Slice); t != nil {
 					s = check.sprintf("%s", t.elem)
 				}
 				s = "..." + s

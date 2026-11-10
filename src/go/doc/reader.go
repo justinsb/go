@@ -35,6 +35,9 @@ func recvString(recv ast.Expr) string {
 		return t.Name
 	case *ast.StarExpr:
 		return "*" + recvString(t.X)
+	case *ast.ConstType:
+		// const receiver: the const qualifier is not part of the receiver string
+		return recvString(t.Elem)
 	case *ast.IndexExpr:
 		// Generic type with one parameter.
 		return fmt.Sprintf("%s[%s]", recvString(t.X), recvParam(t.Index))
@@ -140,6 +143,8 @@ func baseTypeName(x ast.Expr) (name string, imported bool) {
 		return baseTypeName(t.X)
 	case *ast.StarExpr:
 		return baseTypeName(t.X)
+	case *ast.ConstType:
+		return baseTypeName(t.Elem)
 	}
 	return "", false
 }

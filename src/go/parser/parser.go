@@ -772,6 +772,24 @@ func (p *parser) parsePointerType() *ast.StarExpr {
 	return &ast.StarExpr{Star: star, X: base}
 }
 
+// parseConstType parses a const type "const T". If dddok is set,
+// it also accepts a const variadic parameter type "const ...T".
+func (p *parser) parseConstType(dddok bool) *ast.ConstType {
+	if p.trace {
+		defer un(trace(p, "ConstType"))
+	}
+
+	pos := p.expect(token.CONST)
+	var elem ast.Expr
+	if dddok && p.tok == token.ELLIPSIS {
+		elem = p.parseDotsType()
+	} else {
+		elem = p.parseType()
+	}
+
+	return &ast.ConstType{Const: pos, Elem: elem}
+}
+
 func (p *parser) parseDotsType() *ast.Ellipsis {
 	if p.trace {
 		defer un(trace(p, "DotsType"))
@@ -826,6 +844,12 @@ func (p *parser) parseParamDecl(name *ast.Ident, typeSetsOK bool) (f field) {
 			f.typ = p.parseDotsType()
 			return // don't allow ...type "|" ...
 
+		case token.CONST:
+			// name "const" type
+			// name "const" "..." type
+			f.typ = p.parseConstType(true)
+			return
+
 		case token.PERIOD:
 			// name "." ...
 			f.typ = p.parseQualifiedIdent(f.name)
@@ -855,6 +879,12 @@ func (p *parser) parseParamDecl(name *ast.Ident, typeSetsOK bool) (f field) {
 		// (always accepted)
 		f.typ = p.parseDotsType()
 		return // don't allow ...type "|" ...
+
+	case token.CONST:
+		// "const" type
+		// "const" "..." type
+		f.typ = p.parseConstType(true)
+		return
 
 	default:
 		// TODO(rfindley): this is incorrect in the case of type parameter lists
@@ -1009,7 +1039,11 @@ func (p *parser) parseParameterList(name0 *ast.Ident, typ0 ast.Expr, closing tok
 	first := true // only report first occurrence
 	for i, _ := range list {
 		f := &list[i]
-		if t, _ := f.typ.(*ast.Ellipsis); t != nil && (!dddok || i+1 < len(list)) {
+		t, _ := f.typ.(*ast.Ellipsis)
+		if c, _ := f.typ.(*ast.ConstType); c != nil {
+			t, _ = c.Elem.(*ast.Ellipsis) // const ...T
+		}
+		if t != nil && (!dddok || i+1 < len(list)) {
 			if first {
 				first = false
 				if dddok {
@@ -1132,6 +1166,19 @@ func (p *parser) parseMethodSpec() *ast.Field {
 	doc := p.leadComment
 	var idents []*ast.Ident
 	var typ ast.Expr
+
+	if p.tok == token.CONST {
+		// const method: "const" MethodName Signature
+		pos := p.pos
+		p.next()
+		ident := p.parseIdent()
+		params := p.parseParameters(false)
+		results := p.parseParameters(true)
+		idents = []*ast.Ident{ident}
+		typ = &ast.ConstType{Const: pos, Elem: &ast.FuncType{Func: token.NoPos, Params: params, Results: results}}
+		return &ast.Field{Doc: doc, Names: idents, Type: typ}
+	}
+
 	x := p.parseTypeName(nil)
 	if ident, _ := x.(*ast.Ident); ident != nil {
 		switch {
@@ -1262,7 +1309,7 @@ func (p *parser) parseInterfaceType() *ast.InterfaceType {
 parseElements:
 	for {
 		switch {
-		case p.tok == token.IDENT:
+		case p.tok == token.IDENT || p.tok == token.CONST:
 			f := p.parseMethodSpec()
 			if f.Names == nil {
 				f.Type = p.embeddedElem(f.Type)
@@ -1394,6 +1441,8 @@ func (p *parser) tryIdentOrType() ast.Expr {
 		return p.parseMapType()
 	case token.CHAN, token.ARROW:
 		return p.parseChanType()
+	case token.CONST:
+		return p.parseConstType(false)
 	case token.LPAREN:
 		lparen := p.pos
 		p.next()
@@ -2733,7 +2782,7 @@ func extractName(x ast.Expr, force bool) (*ast.Ident, ast.Expr) {
 // The result is false if x could be a type element OR an ordinary (value) expression.
 func isTypeElem(x ast.Expr) bool {
 	switch x := x.(type) {
-	case *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType:
+	case *ast.ArrayType, *ast.StructType, *ast.FuncType, *ast.InterfaceType, *ast.MapType, *ast.ChanType, *ast.ConstType:
 		return true
 	case *ast.BinaryExpr:
 		return isTypeElem(x.X) || isTypeElem(x.Y)

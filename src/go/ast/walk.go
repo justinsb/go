@@ -162,6 +162,9 @@ func Walk(v Visitor, node Node) {
 		Walk(v, n.Key)
 		Walk(v, n.Value)
 
+	case *ConstType:
+		Walk(v, n.Elem)
+
 	case *ChanType:
 		Walk(v, n.Value)
 

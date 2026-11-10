@@ -48,6 +48,24 @@ func (check *Checker) indexExpr(x *operand, e *indexedExpr) (isFuncInst bool) {
 		return false
 	}
 
+	// Indexing a const (or otherwise read-only) operand yields a read-only
+	// element with a const view of the element type.
+	if x.readonly() {
+		x.typ_ = unconst(x.typ())
+		defer func() {
+			if isFuncInst || !x.isValid() {
+				return
+			}
+			switch x.mode() {
+			case variable:
+				x.mode_ = rovariable
+			case mapindex:
+				x.mode_ = commaok // not assignable
+			}
+			x.typ_ = constView(x.typ())
+		}()
+	}
+
 	// We cannot index on an incomplete type; make sure it's complete.
 	if !check.isComplete(x.typ()) {
 		x.invalidate()
@@ -90,7 +108,7 @@ func (check *Checker) indexExpr(x *operand, e *indexedExpr) (isFuncInst bool) {
 	case *Array:
 		valid = true
 		length = typ.len
-		if x.mode() != variable {
+		if !x.addressable() {
 			x.mode_ = value
 		}
 		x.typ_ = typ.elem
@@ -143,7 +161,7 @@ func (check *Checker) indexExpr(x *operand, e *indexedExpr) (isFuncInst bool) {
 			case *Array:
 				l = t.len
 				e = t.elem
-				if x.mode() != variable {
+				if !x.addressable() {
 					mode = value
 				}
 			case *Pointer:
@@ -237,6 +255,16 @@ func (check *Checker) sliceExpr(x *operand, e *ast.SliceExpr) {
 		return
 	}
 
+	// Slicing a const (or otherwise read-only) operand yields a const slice.
+	if x.readonly() {
+		x.typ_ = unconst(x.typ())
+		defer func() {
+			if x.isValid() {
+				x.typ_ = constView(x.typ())
+			}
+		}()
+	}
+
 	// determine common underlying type cu
 	var ct, cu Type // type and respective common underlying type
 	var hasString bool
@@ -319,7 +347,7 @@ func (check *Checker) sliceExpr(x *operand, e *ast.SliceExpr) {
 	case *Array:
 		valid = true
 		length = u.len
-		if x.mode() != variable {
+		if !x.addressable() {
 			check.errorf(x, NonSliceableOperand, "cannot slice unaddressable value %s", x)
 			x.invalidate()
 			return

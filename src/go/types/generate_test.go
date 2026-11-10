@@ -127,6 +127,7 @@ var filemap = map[string]action{
 	},
 	"chan.go":         nil,
 	"const.go":        fixTokenPos,
+	"consttype.go":    nil,
 	"context.go":      nil,
 	"context_test.go": nil,
 	"conversions.go":  nil,

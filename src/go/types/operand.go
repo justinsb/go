@@ -22,33 +22,35 @@ import (
 type operandMode byte
 
 const (
-	invalid   operandMode = iota // operand is invalid
-	novalue                      // operand represents no value (result of a function call w/o result)
-	builtin                      // operand is a built-in function
-	typexpr                      // operand is a type
-	constant_                    // operand is a constant; the operand's typ is a Basic type
-	variable                     // operand is an addressable variable
-	mapindex                     // operand is a map index expression (acts like a variable on lhs, commaok on rhs of an assignment)
-	value                        // operand is a computed value
-	nilvalue                     // operand is the nil value - only used by types2
-	commaok                      // like value, but operand may be used in a comma,ok expression
-	commaerr                     // like commaok, but second value is error, not boolean
-	cgofunc                      // operand is a cgo function
+	invalid    operandMode = iota // operand is invalid
+	novalue                       // operand represents no value (result of a function call w/o result)
+	builtin                       // operand is a built-in function
+	typexpr                       // operand is a type
+	constant_                     // operand is a constant; the operand's typ is a Basic type
+	variable                      // operand is an addressable variable
+	mapindex                      // operand is a map index expression (acts like a variable on lhs, commaok on rhs of an assignment)
+	value                         // operand is a computed value
+	nilvalue                      // operand is the nil value - only used by types2
+	commaok                       // like value, but operand may be used in a comma,ok expression
+	commaerr                      // like commaok, but second value is error, not boolean
+	cgofunc                       // operand is a cgo function
+	rovariable                    // operand is an addressable but read-only variable (a location reached through a const value)
 )
 
 var operandModeString = [...]string{
-	invalid:   "invalid operand",
-	novalue:   "no value",
-	builtin:   "built-in",
-	typexpr:   "type",
-	constant_: "constant",
-	variable:  "variable",
-	mapindex:  "map index expression",
-	value:     "value",
-	nilvalue:  "nil", // only used by types2
-	commaok:   "comma, ok expression",
-	commaerr:  "comma, error expression",
-	cgofunc:   "cgo function",
+	invalid:    "invalid operand",
+	novalue:    "no value",
+	builtin:    "built-in",
+	typexpr:    "type",
+	constant_:  "constant",
+	variable:   "variable",
+	mapindex:   "map index expression",
+	value:      "value",
+	nilvalue:   "nil", // only used by types2
+	commaok:    "comma, ok expression",
+	commaerr:   "comma, error expression",
+	cgofunc:    "cgo function",
+	rovariable: "read-only variable",
 }
 
 // An operand represents an intermediate value during type checking.
@@ -70,6 +72,28 @@ func (x *operand) mode() operandMode {
 
 func (x *operand) typ() Type {
 	return x.typ_
+}
+
+// addressable reports whether x is addressable; i.e., whether
+// x is a variable (which may be read-only).
+func (x *operand) addressable() bool {
+	return x.mode_ == variable || x.mode_ == rovariable
+}
+
+// readonly reports whether x was obtained through a const value
+// and thus must not be used to modify what it refers to.
+func (x *operand) readonly() bool {
+	return x.mode_ == rovariable || isConst(x.typ_)
+}
+
+// varMode returns the operand mode for an addressable location
+// derived from x (such as a field or element of x): the result
+// is rovariable if x is read-only, and variable otherwise.
+func (x *operand) varMode() operandMode {
+	if x.readonly() {
+		return rovariable
+	}
+	return variable
 }
 
 func (x *operand) isValid() bool {
@@ -339,6 +363,56 @@ func (x *operand) assignableTo(check *Checker, T Type, cause *string) (bool, Cod
 		return true, 0
 	}
 
+	// T is a const type "const T1": x is assignable to T if x (ignoring
+	// its constness) is assignable to T1. Because everything reachable
+	// through a const value is const, const qualifiers inside composite
+	// types are irrelevant.
+	if Tc := asConst(T); Tc != nil {
+		T1 := Tc.elem
+		V1 := Unalias(unconst(V))
+		if identicalIgnoreConst(V1, T1) {
+			return true, 0
+		}
+		if isTyped(V1) {
+			_, isTParamV := V1.(*TypeParam)
+			if isNonTypeParamInterface(T1) {
+				// V must implement T1. If V is a const type, only
+				// its const methods are available (see missingMethod).
+				if check.implements(V, T1, false, cause) {
+					return true, 0
+				}
+				if !isTParamV {
+					return false, InvalidIfaceAssign
+				}
+				if cause != nil {
+					*cause = ""
+				}
+			}
+			if identicalIgnoreConst(V1.Underlying(), T1.Underlying()) && (!hasName(V1) || !hasName(T1)) && !isTParamV && !isTypeParam(T1) {
+				return true, 0
+			}
+		}
+		y := *x
+		y.typ_ = V1
+		return y.assignableTo(check, T1, cause)
+	}
+
+	// x has a const type "const V1" but T is not a const type: x is
+	// assignable only if V1 is a value type (the assignment creates
+	// an independent copy); otherwise the assignment would discard
+	// the const qualifier.
+	if Vc := asConst(V); Vc != nil {
+		if isValueType(Vc.elem) {
+			y := *x
+			y.typ_ = Vc.elem
+			return y.assignableTo(check, origT, cause)
+		}
+		if cause != nil {
+			*cause = "discards const qualifier"
+		}
+		return false, IncompatibleAssign
+	}
+
 	Vu := V.Underlying()
 	Tu := T.Underlying()
 	Vp, _ := V.(*TypeParam)
@@ -371,6 +445,15 @@ func (x *operand) assignableTo(check *Checker, T Type, cause *string) (bool, Cod
 	// and neither V nor T is a type parameter.
 	if Identical(Vu, Tu) && (!hasName(V) || !hasName(T)) && Vp == nil && Tp == nil {
 		return true, 0
+	}
+
+	// V and T are function types that differ only in const qualifiers
+	// such that a function of type V can be used as a function of type T,
+	// and at least one of V or T is not a named type.
+	if Vs, _ := Vu.(*Signature); Vs != nil && Vp == nil && Tp == nil {
+		if Ts, _ := Tu.(*Signature); Ts != nil && (!hasName(V) || !hasName(T)) && constCompatible(Vs, Ts) {
+			return true, 0
+		}
 	}
 
 	// T is an interface type, but not a type parameter, and V implements T.

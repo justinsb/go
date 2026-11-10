@@ -119,6 +119,10 @@ func (hr hasher) hash(h *maphash.Hash, t Type) {
 		h.WriteByte('P')
 		hr.hash(h, t.Elem())
 
+	case *ConstType:
+		h.WriteByte('K')
+		hr.hash(h, t.Elem())
+
 	case *Signature:
 		h.WriteByte('F')
 		maphash.WriteComparable(h, t.Variadic())
@@ -263,6 +267,10 @@ func (hr hasher) shallowHash(h *maphash.Hash, t Type) {
 
 	case *Pointer:
 		h.WriteByte('P')
+		// ignore t.Elem()
+
+	case *ConstType:
+		h.WriteByte('K')
 		// ignore t.Elem()
 
 	case *Signature:
