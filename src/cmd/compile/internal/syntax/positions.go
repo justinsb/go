@@ -230,6 +230,8 @@ func EndPos(n Node) Pos {
 			m = n.Elem
 		case *DotsType:
 			m = n.Elem
+		case *ConstType:
+			m = n.Elem
 		case *StructType:
 			if l := lastField(n.FieldList); l != nil {
 				m = l

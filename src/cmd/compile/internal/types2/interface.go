@@ -140,7 +140,14 @@ func (check *Checker) interfaceType(ityp *Interface, iface *syntax.InterfaceType
 			continue // ignore
 		}
 
-		typ := check.typ(f.Type)
+		// A const method is represented by a ConstType wrapping the method signature.
+		ftyp := f.Type
+		ctyp, _ := ftyp.(*syntax.ConstType)
+		if ctyp != nil {
+			ftyp = ctyp.Elem
+		}
+
+		typ := check.typ(ftyp)
 		sig, _ := typ.(*Signature)
 		if sig == nil {
 			if isValid(typ) {
@@ -157,6 +164,7 @@ func (check *Checker) interfaceType(ityp *Interface, iface *syntax.InterfaceType
 			}
 		}
 		sig.recv = newVar(RecvVar, f.Name.Pos(), check.pkg, "", recvTyp)
+		sig.constRcv = ctyp != nil
 
 		m := NewFunc(f.Name.Pos(), check.pkg, name, sig)
 		check.recordDef(f.Name, m)

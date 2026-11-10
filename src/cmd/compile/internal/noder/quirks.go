@@ -38,6 +38,8 @@ func typeExprEndPos(expr0 syntax.Expr) syntax.Pos {
 			expr0 = expr.Elem
 		case *syntax.DotsType:
 			expr0 = expr.Elem
+		case *syntax.ConstType:
+			expr0 = expr.Elem
 		case *syntax.MapType:
 			expr0 = expr.Value
 		case *syntax.SliceType:

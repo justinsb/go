@@ -80,6 +80,54 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		}
 	}
 
+	// Const handling.
+	// constSrc is set if the source operand of append(dst, src...) or
+	// copy(dst, src) is a const slice; in that case the const qualifier
+	// is removed from args[1] and the element assignability is checked
+	// explicitly below.
+	constSrc := false
+	switch id {
+	case _Append, _Copy, _Clear, _Delete:
+		if isConst(x.typ()) {
+			var what string
+			var code Code
+			switch id {
+			case _Append:
+				what, code = "append to", InvalidAppend
+			case _Copy:
+				what, code = "copy into", InvalidCopy
+			case _Clear:
+				what, code = "clear", InvalidClear
+			case _Delete:
+				what, code = "delete from", InvalidDelete
+			}
+			check.errorf(x, code, invalidOp+"cannot %s const value %s", what, x)
+			return
+		}
+		if (id == _Copy || id == _Append && nargs == 2 && hasDots(call)) && isConst(args[1].typ()) {
+			constSrc = true
+			y := *args[1]
+			y.typ_ = unconst(y.typ())
+			args[1] = &y
+		}
+	case _Cap, _Len:
+		x.typ_ = unconst(x.typ())
+	}
+
+	// constElemOk reports whether an element of type srcE obtained from
+	// a const slice may be assigned to an element of type dstE.
+	constElemOk := func(dstE, srcE Type) bool {
+		if !constSrc {
+			return true
+		}
+		y := operand{mode_: value, expr: args[1].expr, typ_: constView(srcE)}
+		if ok, _ := y.assignableTo(check, dstE, nil); !ok {
+			check.errorf(args[1], IncompatibleAssign, invalidOp+"cannot copy elements of const value %s to elements of type %s (discards const qualifier)", args[1].expr, dstE)
+			return false
+		}
+		return true
+	}
+
 	switch id {
 	case _Append:
 		// append(s S, x ...E) S, where E is the element type of S
@@ -130,6 +178,11 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 
 		// general case
 		if sig == nil {
+			if constSrc {
+				if srcE, _ := sliceElem(args[1]); srcE != nil && !constElemOk(E, srcE) {
+					return
+				}
+			}
 			// check arguments by creating custom signature
 			sig = makeSig(x.typ(), x.typ(), NewSlice(E)) // []E required for variadic signature
 			sig.variadic = true
@@ -379,7 +432,7 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		}
 
 		// get special case out of the way
-		y := args[1]
+		y := args[1] // const qualifier removed, if any
 		var special bool
 		if ok, _ := x.assignableTo(check, NewSlice(universeByte), nil); ok {
 			special = true
@@ -406,8 +459,11 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 				}
 				srcE = universeByte
 			}
-			if !Identical(dstE, srcE) {
+			if !Identical(dstE, srcE) && !(constSrc && identicalIgnoreConst(dstE, srcE)) {
 				check.errorf(x, InvalidCopy, "invalid copy: arguments %s and %s have different element types %s and %s", x, y, dstE, srcE)
+				return
+			}
+			if !constElemOk(dstE, srcE) {
 				return
 			}
 		}
@@ -810,7 +866,7 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// record the selector expression (was bug - go.dev/issue/47895)
 		{
 			mode := value
-			if x.mode() == variable || indirect {
+			if x.addressable() || indirect {
 				mode = variable
 			}
 			check.record(&operand{mode, selx, obj.Type(), nil, 0})
@@ -865,7 +921,8 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// unsafe.Slice(ptr *T, len IntegerType) []T
 		check.verifyVersionf(call.Fun, go1_17, "unsafe.Slice")
 
-		u, _ := commonUnder(x.typ(), nil)
+		ro := isConst(x.typ())
+		u, _ := commonUnder(unconst(x.typ()), nil)
 		ptr, _ := u.(*Pointer)
 		if ptr == nil {
 			check.errorf(x, InvalidUnsafeSlice, invalidArg+"%s is not a pointer", x)
@@ -882,12 +939,16 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		if check.recordTypes() {
 			check.recordBuiltinType(call.Fun, makeSig(x.typ(), ptr, y.typ()))
 		}
+		if ro {
+			x.typ_ = constView(x.typ())
+		}
 
 	case _SliceData:
 		// unsafe.SliceData(slice []T) *T
 		check.verifyVersionf(call.Fun, go1_20, "unsafe.SliceData")
 
-		u, _ := commonUnder(x.typ(), nil)
+		ro := isConst(x.typ())
+		u, _ := commonUnder(unconst(x.typ()), nil)
 		slice, _ := u.(*Slice)
 		if slice == nil {
 			check.errorf(x, InvalidUnsafeSliceData, invalidArg+"%s is not a slice", x)
@@ -898,6 +959,9 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		x.typ_ = NewPointer(slice.elem)
 		if check.recordTypes() {
 			check.recordBuiltinType(call.Fun, makeSig(x.typ(), slice))
+		}
+		if ro {
+			x.typ_ = constView(x.typ())
 		}
 
 	case _String:

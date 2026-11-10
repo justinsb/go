@@ -407,6 +407,8 @@ func (c *DeepCopier) CopyExpr(e syntax.Expr) syntax.Expr {
 		newE = &syntax.SliceType{Elem: c.CopyExpr(e.Elem)}
 	case *syntax.DotsType:
 		newE = &syntax.DotsType{Elem: c.CopyExpr(e.Elem)}
+	case *syntax.ConstType:
+		newE = &syntax.ConstType{Elem: c.CopyExpr(e.Elem)}
 	case *syntax.StructType:
 		newE = &syntax.StructType{
 			FieldList: c.CopyFieldList(e.FieldList),

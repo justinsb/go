@@ -525,6 +525,10 @@ func (r *reader) doTyp() *types.Type {
 		return types.NewMap(r.typ(), r.typ())
 	case pkgbits.TypePointer:
 		return types.NewPtr(r.typ())
+	case pkgbits.TypeConst:
+		// Const qualifiers are checked by the type checker and
+		// are irrelevant for the backend: const T is simply T.
+		return r.typ()
 	case pkgbits.TypeSignature:
 		return r.signature(nil)
 	case pkgbits.TypeSlice:

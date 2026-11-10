@@ -1067,7 +1067,7 @@ func (p *parser) operand(keep_parens bool) Expr {
 		}
 		return ftyp
 
-	case _Lbrack, _Chan, _Map, _Struct, _Interface:
+	case _Lbrack, _Chan, _Map, _Struct, _Interface, _Const:
 		return p.type_() // othertype
 
 	default:
@@ -1345,10 +1345,11 @@ func newIndirect(pos Pos, typ Expr) Expr {
 // typeOrNil is like type_ but it returns nil if there was no type
 // instead of reporting an error.
 //
-//	Type     = TypeName | TypeLit | "(" Type ")" .
-//	TypeName = identifier | QualifiedIdent .
-//	TypeLit  = ArrayType | StructType | PointerType | FunctionType | InterfaceType |
+//	Type      = TypeName | TypeLit | ConstType | "(" Type ")" .
+//	TypeName  = identifier | QualifiedIdent .
+//	TypeLit   = ArrayType | StructType | PointerType | FunctionType | InterfaceType |
 //		      SliceType | MapType | Channel_Type .
+//	ConstType = "const" Type .
 func (p *parser) typeOrNil() Expr {
 	if trace {
 		defer p.trace("typeOrNil")()
@@ -1356,6 +1357,14 @@ func (p *parser) typeOrNil() Expr {
 
 	pos := p.pos()
 	switch p.tok {
+	case _Const:
+		// consttype
+		p.next()
+		t := new(ConstType)
+		t.pos = pos
+		t.Elem = p.type_()
+		return t
+
 	case _Star:
 		// ptrtype
 		p.next()
@@ -1557,7 +1566,7 @@ func (p *parser) structType() *StructType {
 	return typ
 }
 
-// InterfaceType = "interface" "{" { ( MethodDecl | EmbeddedElem ) ";" } "}" .
+// InterfaceType = "interface" "{" { ( [ "const" ] MethodDecl | EmbeddedElem ) ";" } "}" .
 func (p *parser) interfaceType() *InterfaceType {
 	if trace {
 		defer p.trace("interfaceType")()
@@ -1570,6 +1579,25 @@ func (p *parser) interfaceType() *InterfaceType {
 	p.want(_Lbrace)
 	p.list("interface type", _Semi, _Rbrace, func() bool {
 		var f *Field
+		if p.tok == _Const {
+			// const method: "const" MethodName Signature
+			pos := p.pos()
+			p.next()
+			if p.tok != _Name {
+				p.syntaxError("expected method name after const")
+				p.advance(_Semi, _Rbrace)
+				return false
+			}
+			f = new(Field)
+			f.pos = pos
+			f.Name = p.name()
+			t := new(ConstType)
+			t.pos = pos
+			_, t.Elem = p.funcType("interface method")
+			f.Type = t
+			typ.MethodList = append(typ.MethodList, f)
+			return false
+		}
 		if p.tok == _Name {
 			f = p.methodDecl()
 		}

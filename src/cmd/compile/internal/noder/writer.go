@@ -163,7 +163,32 @@ func (pw *pkgWriter) maybeTypeAndValue(x syntax.Expr) (syntax.TypeAndValue, bool
 		}
 	}
 
+	// Const qualifiers are irrelevant for the backend: they are erased
+	// from all types. Remove a top-level const qualifier now so that the
+	// writer doesn't have to worry about const types of expressions.
+	// (Const qualifiers nested inside other types are erased by the
+	// reader when it reads back the type; see reader.doTyp.)
+	tv.Type = unconst(tv.Type)
+
 	return tv, tv.Type != nil
+}
+
+// unconst returns the element type of typ if it is a const
+// type; otherwise it returns typ unchanged.
+func unconst(typ types2.Type) types2.Type {
+	if typ != nil {
+		if c, ok := types2.Unalias(typ).(*types2.ConstType); ok {
+			return c.Elem()
+		}
+	}
+	return typ
+}
+
+// assignableIgnoreConst reports whether a value of type src is assignable
+// to a variable of type dst if const qualifiers don't matter. (The type
+// checker has already verified that const qualifiers are not violated.)
+func assignableIgnoreConst(src, dst types2.Type) bool {
+	return types2.AssignableTo(src, dst) || types2.AssignableTo(src, types2.NewConstType(dst))
 }
 
 // typeOf returns the Type of the given value expression.
@@ -588,6 +613,10 @@ func (pw *pkgWriter) typIdx(typ types2.Type, dict *writerDict) typeInfo {
 		w.Code(pkgbits.TypePointer)
 		w.typ(typ.Elem())
 
+	case *types2.ConstType:
+		w.Code(pkgbits.TypeConst)
+		w.typ(typ.Elem())
+
 	case *types2.Signature:
 		base.Assertf(typ.TypeParams() == nil, "unexpected type params: %v", typ)
 		w.Code(pkgbits.TypeSignature)
@@ -702,6 +731,15 @@ func (w *writer) interfaceType(typ *types2.Interface) {
 		w.selector(m)
 		w.signature(sig)
 	}
+	writeConstMethods := func() {
+		// Const methods are recorded at the very end so that readers that
+		// don't know about const methods are not affected: they simply
+		// ignore the extra data.
+		for i := 0; i < typ.NumExplicitMethods(); i++ {
+			w.Bool(typ.ExplicitMethod(i).Type().(*types2.Signature).ConstMethod())
+		}
+	}
+	defer writeConstMethods()
 
 	for i := 0; i < typ.NumEmbeddeds(); i++ {
 		w.typ(typ.EmbeddedType(i))
@@ -1096,7 +1134,7 @@ func (w *writer) qualifiedIdent(obj types2.Object) {
 	// Generic methods are promoted to objects and thus need qualified identifiers.
 	// They must be contextualized by their defining type.
 	if isGenericMethod(obj.Type()) {
-		recv := obj.Type().(*types2.Signature).Recv().Type()
+		recv := unconst(obj.Type().(*types2.Signature).Recv().Type())
 		fstr := "%s.%s"
 		if _, ok := types2.Unalias(recv).(*types2.Pointer); ok {
 			fstr = "(*%s).%s"
@@ -1797,7 +1835,7 @@ func (w *writer) switchStmt(stmt *syntax.SwitchStmt) {
 		Outer:
 			for _, clause := range stmt.Body {
 				for _, cas := range syntax.UnpackListExpr(clause.Cases) {
-					if casType := w.p.typeOf(cas); !types2.AssignableTo(casType, tagType) && (types2.IsInterface(casType) || types2.IsInterface(tagType)) {
+					if casType := w.p.typeOf(cas); !assignableIgnoreConst(casType, tagType) && (types2.IsInterface(casType) || types2.IsInterface(tagType)) {
 						tagType = types2.NewInterfaceType(nil, nil)
 						break Outer
 					}
@@ -2067,6 +2105,8 @@ func (w *writer) expr(expr syntax.Expr) {
 				commonType = ytyp
 			case types2.AssignableTo(ytyp, xtyp):
 				commonType = xtyp
+			case types2.IdenticalIgnoreConst(xtyp, ytyp):
+				commonType = xtyp // types differ only in (erased) const qualifiers
 			default:
 				w.p.fatalf(expr, "failed to find common type between %v and %v", xtyp, ytyp)
 			}
@@ -2263,10 +2303,10 @@ func (w *writer) methExpr(expr *syntax.SelectorExpr, sel *types2.Selection) {
 	w.Len(len(implicits))
 	for _, ix := range implicits {
 		w.Len(ix)
-		typ = deref2(typ).Underlying().(*types2.Struct).Field(ix).Type()
+		typ = unconst(deref2(typ).Underlying().(*types2.Struct).Field(ix).Type())
 	}
 
-	recv := sel.Obj().(*types2.Func).Type().(*types2.Signature).Recv().Type()
+	recv := unconst(sel.Obj().(*types2.Func).Type().(*types2.Signature).Recv().Type())
 	if w.Bool(isPtrTo(typ, recv)) { // need deref
 		typ = recv
 	} else if w.Bool(isPtrTo(recv, typ)) { // need addr
@@ -2291,11 +2331,11 @@ func (w *writer) recvExpr(expr *syntax.SelectorExpr, sel *types2.Selection) type
 
 	typ := w.p.typeOf(expr.X)
 	for _, ix := range implicits {
-		typ = deref2(typ).Underlying().(*types2.Struct).Field(ix).Type()
+		typ = unconst(deref2(typ).Underlying().(*types2.Struct).Field(ix).Type())
 		w.Len(ix)
 	}
 
-	recv := sel.Obj().(*types2.Func).Type().(*types2.Signature).Recv().Type()
+	recv := unconst(sel.Obj().(*types2.Func).Type().(*types2.Signature).Recv().Type())
 	if w.Bool(isPtrTo(typ, recv)) { // needs deref
 		typ = recv
 	} else if w.Bool(isPtrTo(recv, typ)) { // needs addr
@@ -2417,15 +2457,15 @@ func (w *writer) multiExpr(pos poser, dstType func(int) types2.Type, exprs []syn
 
 			w.Len(tuple.Len())
 			for i := 0; i < tuple.Len(); i++ {
-				src := tuple.At(i).Type()
+				src := unconst(tuple.At(i).Type())
 				// TODO(mdempsky): Investigate not writing src here. I think
 				// the reader should be able to infer it from expr anyway.
 				w.typ(src)
-				if dst := dstType(i); w.Bool(dst != nil && !types2.Identical(src, dst)) {
+				if dst := unconst(dstType(i)); w.Bool(dst != nil && !types2.IdenticalIgnoreConst(src, dst)) {
 					if src == nil || dst == nil {
 						w.p.fatalf(pos, "src is %v, dst is %v", src, dst)
 					}
-					if !types2.AssignableTo(src, dst) {
+					if !assignableIgnoreConst(src, dst) {
 						w.p.fatalf(pos, "%v is not assignable to %v", src, dst)
 					}
 					w.typ(dst)
@@ -2452,15 +2492,17 @@ func (w *writer) implicitConvExpr(dst types2.Type, expr syntax.Expr) {
 
 func (w *writer) convertExpr(dst types2.Type, expr syntax.Expr, implicit bool) {
 	src := w.p.typeOf(expr)
+	dst = unconst(dst)
 
 	// Omit implicit no-op conversions.
-	identical := dst == nil || types2.Identical(src, dst)
+	// (Const qualifiers are erased and thus don't matter.)
+	identical := dst == nil || types2.IdenticalIgnoreConst(src, dst)
 	if implicit && identical {
 		w.expr(expr)
 		return
 	}
 
-	if implicit && !types2.AssignableTo(src, dst) {
+	if implicit && !assignableIgnoreConst(src, dst) {
 		w.p.fatalf(expr, "%v is not assignable to %v", src, dst)
 	}
 
@@ -3218,7 +3260,7 @@ func (pw *pkgWriter) isBuiltin(expr syntax.Expr, builtin string) bool {
 
 // recvBase returns the base type for the given receiver parameter.
 func recvBase(recv *types2.Var) *types2.Named {
-	typ := types2.Unalias(recv.Type())
+	typ := types2.Unalias(unconst(recv.Type()))
 	if ptr, ok := typ.(*types2.Pointer); ok {
 		typ = types2.Unalias(ptr.Elem())
 	}
@@ -3342,7 +3384,7 @@ func asWasmExport(p syntax.Pragma) *WasmExport {
 
 // isPtrTo reports whether from is the type *to.
 func isPtrTo(from, to types2.Type) bool {
-	ptr, ok := types2.Unalias(from).(*types2.Pointer)
+	ptr, ok := types2.Unalias(unconst(from)).(*types2.Pointer)
 	return ok && types2.Identical(ptr.Elem(), to)
 }
 

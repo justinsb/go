@@ -87,6 +87,14 @@ func Identical(x, y Type) bool {
 	return c.identical(x, y, nil)
 }
 
+// IdenticalIgnoreConst reports whether x and y are identical types if const
+// qualifiers are ignored, both at the top-level and inside composite types
+// (but not inside function, channel, or interface types, nor in type arguments).
+// Receivers of [Signature] types are ignored.
+func IdenticalIgnoreConst(x, y Type) bool {
+	return identicalIgnoreConst(x, y)
+}
+
 // IdenticalIgnoreTags reports whether x and y are identical types if tags are ignored.
 // Receivers of [Signature] types are ignored.
 func IdenticalIgnoreTags(x, y Type) bool {

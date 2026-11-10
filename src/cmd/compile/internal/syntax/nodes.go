@@ -281,6 +281,17 @@ type (
 		expr
 	}
 
+	// const Elem
+	//
+	// A ConstType denotes a deeply read-only view of type Elem.
+	// As the Type of an interface method Field, a ConstType wraps
+	// the method's *FuncType and marks the method as a const method
+	// (a method that may be called on a const interface value).
+	ConstType struct {
+		Elem Expr
+		expr
+	}
+
 	// ...Elem
 	DotsType struct {
 		Elem Expr

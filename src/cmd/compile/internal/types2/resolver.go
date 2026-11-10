@@ -538,6 +538,10 @@ func (check *Checker) sortObjects() {
 func (check *Checker) unpackRecv(rtyp syntax.Expr, unpackParams bool) (ptr bool, base syntax.Expr, tparams []*syntax.Name) {
 	// unpack receiver type
 	base = syntax.Unparen(rtyp)
+	if t, _ := base.(*syntax.ConstType); t != nil {
+		// const receiver: const T or const *T
+		base = syntax.Unparen(t.Elem)
+	}
 	if t, _ := base.(*syntax.Operation); t != nil && t.Op == syntax.Mul && t.Y == nil {
 		ptr = true
 		base = syntax.Unparen(t.X)

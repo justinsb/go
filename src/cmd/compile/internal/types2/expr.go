@@ -138,9 +138,15 @@ func (check *Checker) unary(x *operand, e *syntax.Operation) {
 	case syntax.And:
 		// spec: "As an exception to the addressability
 		// requirement x may also be a composite literal."
-		if _, ok := syntax.Unparen(e.X).(*syntax.CompositeLit); !ok && x.mode() != variable {
+		if _, ok := syntax.Unparen(e.X).(*syntax.CompositeLit); !ok && !x.addressable() {
 			check.errorf(x, UnaddressableOperand, invalidOp+"cannot take address of %s", x)
 			x.invalidate()
+			return
+		}
+		if x.mode() == rovariable {
+			// The address of a read-only location is a const pointer.
+			x.mode_ = value
+			x.typ_ = NewConstType(&Pointer{base: unconst(x.typ())})
 			return
 		}
 		x.mode_ = value
@@ -431,6 +437,9 @@ func (check *Checker) implicitTypeAndValue(x *operand, target Type) (Type, const
 		}
 		return nil, nil, InvalidUntypedConversion
 	}
+
+	// An untyped value converts to a const type like it converts to its element type.
+	target = unconst(target)
 
 	switch u := target.Underlying().(type) {
 	case *Basic:
@@ -992,6 +1001,12 @@ func (check *Checker) rawExpr(T *target, x *operand, e syntax.Expr, hint Type, a
 
 	kind := check.exprInternal(T, x, e, hint)
 
+	// A value of type const T where T is a value type is simply a value of type T.
+	switch x.mode() {
+	case constant_, variable, rovariable, mapindex, value, commaok, commaerr:
+		x.typ_ = eraseValueConst(x.typ())
+	}
+
 	if !allowGeneric {
 		check.nonGeneric(T, x)
 	}
@@ -1111,6 +1126,9 @@ func (check *Checker) exprInternal(T *target, x *operand, e syntax.Expr, hint Ty
 			check.error(e, InvalidSyntaxTree, "invalid use of AssertExpr")
 			goto Error
 		}
+		// A type assertion on a const interface value yields a const value.
+		ro := x.readonly()
+		x.typ_ = unconst(x.typ())
 		if isTypeParam(x.typ()) {
 			check.errorf(x, InvalidAssert, invalidOp+"cannot use type assertion on type parameter value %s", x)
 			goto Error
@@ -1127,9 +1145,13 @@ func (check *Checker) exprInternal(T *target, x *operand, e syntax.Expr, hint Ty
 		if !check.isComplete(T) {
 			goto Error
 		}
-		check.typeAssertion(e, x, T, false)
+		// Const qualifiers don't matter for the dynamic type of a value.
+		check.typeAssertion(e, x, unconst(T), false)
 		x.mode_ = commaok
 		x.typ_ = T
+		if ro {
+			x.typ_ = constView(T)
+		}
 
 	case *syntax.TypeSwitchGuard:
 		// x.(type) expressions are handled explicitly in type switches
@@ -1178,6 +1200,9 @@ func (check *Checker) exprInternal(T *target, x *operand, e syntax.Expr, hint Ty
 					check.validVarType(e.X, x.typ())
 					x.typ_ = &Pointer{base: x.typ()}
 				default:
+					// Indirection through a const pointer yields a read-only variable.
+					ro := x.readonly()
+					x.typ_ = unconst(x.typ())
 					var base Type
 					if !underIs(x.typ(), func(u Type) bool {
 						p, _ := u.(*Pointer)
@@ -1200,6 +1225,10 @@ func (check *Checker) exprInternal(T *target, x *operand, e syntax.Expr, hint Ty
 					}
 					x.mode_ = variable
 					x.typ_ = base
+					if ro {
+						x.mode_ = rovariable
+						x.typ_ = constView(base)
+					}
 				}
 				break
 			}
@@ -1341,7 +1370,7 @@ func (check *Checker) multiExpr(e syntax.Expr, allowCommaOk bool) (list []*opera
 		for i, v := range t.vars {
 			// create a dummy expression (in place of e) for better error messages
 			dummy := syntax.NewName(syntax.StartPos(e), nth(i+1, "function result"))
-			list[i] = &operand{mode_: value, expr: dummy, typ_: v.typ}
+			list[i] = &operand{mode_: value, expr: dummy, typ_: eraseValueConst(v.typ)}
 		}
 		return
 	}

@@ -164,6 +164,9 @@ func comparableType(T Type, dynamic bool, seen map[Type]bool) *typeError {
 	seen[T] = true
 
 	switch t := T.Underlying().(type) {
+	case *ConstType:
+		return comparableType(t.elem, dynamic, seen)
+
 	case *Basic:
 		// assume invalid types to be comparable to avoid follow-up errors
 		if t.kind == UntypedNil {
@@ -207,6 +210,8 @@ func comparableType(T Type, dynamic bool, seen map[Type]bool) *typeError {
 // hasNil reports whether type t includes the nil value.
 func hasNil(t Type) bool {
 	switch u := t.Underlying().(type) {
+	case *ConstType:
+		return hasNil(u.elem)
 	case *Basic:
 		return u.kind == UnsafePointer
 	case *Slice, *Pointer, *Signature, *Map, *Chan:
@@ -243,6 +248,15 @@ func (p *ifacePair) identical(q *ifacePair) bool {
 type comparer struct {
 	ignoreTags     bool // if set, identical ignores struct tags
 	ignoreInvalids bool // if set, identical treats an invalid type as identical to any type
+	ignoreConst    bool // if set, identical ignores const qualifiers (except inside function, channel, and interface types)
+}
+
+// strict returns a comparer like c but which doesn't ignore const qualifiers.
+func (c *comparer) strict() *comparer {
+	if c.ignoreConst {
+		return &comparer{ignoreTags: c.ignoreTags, ignoreInvalids: c.ignoreInvalids}
+	}
+	return c
 }
 
 // For changes to this code the corresponding changes should be made to unifier.nify.
@@ -258,7 +272,21 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 		return true
 	}
 
+	if c.ignoreConst {
+		x = Unalias(unconst(x))
+		y = Unalias(unconst(y))
+		if x == y {
+			return true
+		}
+	}
+
 	switch x := x.(type) {
+	case *ConstType:
+		// Two const types are identical if they have identical element types.
+		if y, ok := y.(*ConstType); ok {
+			return c.identical(x.elem, y.elem, p)
+		}
+
 	case *Basic:
 		// Basic types are singletons except for the rune and byte
 		// aliases, thus we cannot solely rely on the x == y check
@@ -330,6 +358,7 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 		if y == nil {
 			return false
 		}
+		c := c.strict() // const is not transitive through function types
 
 		// Two function types are identical if they have the same number of
 		// parameters and result values, corresponding parameter and result types
@@ -396,6 +425,7 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 		// are the same. Lower-case method names from different packages are always
 		// different. The order of the methods is irrelevant.
 		if y, ok := y.(*Interface); ok {
+			c := c.strict() // const is not transitive through interface method signatures
 			xset := x.typeSet()
 			yset := y.typeSet()
 			if xset.comparable != yset.comparable {
@@ -442,7 +472,7 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 				}
 				for i, f := range a {
 					g := b[i]
-					if f.Id() != g.Id() || !c.identical(f.typ, g.typ, q) {
+					if f.Id() != g.Id() || f.isConstMethod() != g.isConstMethod() || !c.identical(f.typ, g.typ, q) {
 						return false
 					}
 				}
@@ -460,6 +490,7 @@ func (c *comparer) identical(x, y Type, p *ifacePair) bool {
 		// Two channel types are identical if they have identical value types
 		// and the same direction.
 		if y, ok := y.(*Chan); ok {
+			c := c.strict() // const is not transitive through channels
 			return x.dir == y.dir && c.identical(x.elem, y.elem, p)
 		}
 

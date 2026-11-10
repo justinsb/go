@@ -303,6 +303,13 @@ func (check *Checker) typInternal(e0 syntax.Expr, def *TypeName) (T Type) {
 		typ.elem = check.varType(e.Elem)
 		return typ
 
+	case *syntax.ConstType:
+		elem := check.varType(e.Elem)
+		if !isValid(elem) {
+			return Typ[Invalid]
+		}
+		return NewConstType(elem)
+
 	case *syntax.DotsType:
 		// dots are handled explicitly where they are valid
 		check.error(e, InvalidSyntaxTree, "invalid use of ...")

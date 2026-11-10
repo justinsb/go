@@ -467,6 +467,9 @@ func (p *printer) printRawNode(n Node) {
 	case *DotsType:
 		p.print(_DotDotDot, n.Elem)
 
+	case *ConstType:
+		p.print(_Const, blank, n.Elem)
+
 	case *StructType:
 		p.print(_Struct)
 		if len(n.FieldList) > 0 && p.linebreaks {
@@ -767,8 +770,14 @@ func (p *printer) printMethodList(methods []*Field) {
 			p.print(_Semi, newline)
 		}
 		if m.Name != nil {
+			typ := m.Type
+			if c, _ := typ.(*ConstType); c != nil {
+				// const method
+				p.print(_Const, blank)
+				typ = c.Elem
+			}
 			p.printNode(m.Name)
-			p.printSignature(m.Type.(*FuncType))
+			p.printSignature(typ.(*FuncType))
 		} else {
 			p.printNode(m.Type)
 		}

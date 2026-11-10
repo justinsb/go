@@ -283,6 +283,8 @@ func (r *reader) doTyp() (res types2.Type) {
 		return types2.NewMap(r.typ(), r.typ())
 	case pkgbits.TypePointer:
 		return types2.NewPointer(r.typ())
+	case pkgbits.TypeConst:
+		return types2.NewConstType(r.typ())
 	case pkgbits.TypeSignature:
 		return r.signature(nil, nil, nil)
 	case pkgbits.TypeSlice:
@@ -339,6 +341,13 @@ func (r *reader) interfaceType() *types2.Interface {
 
 	for i := range embeddeds {
 		embeddeds[i] = r.typ()
+	}
+
+	// const methods
+	for _, m := range methods {
+		if r.Bool() {
+			m.Type().(*types2.Signature).SetConstMethod(true)
+		}
 	}
 
 	iface := types2.NewInterfaceType(methods, embeddeds)

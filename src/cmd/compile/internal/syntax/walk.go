@@ -183,6 +183,9 @@ func (w walker) node(n Node) {
 	case *DotsType:
 		w.node(n.Elem)
 
+	case *ConstType:
+		w.node(n.Elem)
+
 	case *StructType:
 		w.fieldList(n.FieldList)
 		for _, t := range n.TagList {

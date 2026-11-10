@@ -117,6 +117,8 @@ func (check *Checker) isComplete(t Type) bool {
 	case *Named:
 		obj = t.obj
 		rhs = t.fromRHS
+	case *ConstType:
+		return check.isComplete(t.elem)
 	default:
 		return true
 	}

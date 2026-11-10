@@ -223,6 +223,8 @@ func (a *Analyzer) checkTypeRecursive(t types2.Type) bool {
 		return false
 	case *types2.Pointer:
 		return memo(a.checkTypeRecursive(t.Elem()))
+	case *types2.ConstType:
+		return memo(a.checkTypeRecursive(t.Elem()))
 	case *types2.Slice:
 		return memo(a.checkTypeRecursive(t.Elem()))
 	case *types2.Array:
@@ -267,6 +269,8 @@ func (a *Analyzer) markHasMethod(t types2.Type) {
 
 	switch t := t.(type) {
 	case *types2.Pointer:
+		a.markHasMethod(t.Elem())
+	case *types2.ConstType:
 		a.markHasMethod(t.Elem())
 	case *types2.Alias:
 		a.markHasMethod(t.Rhs())

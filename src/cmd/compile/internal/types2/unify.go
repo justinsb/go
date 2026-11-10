@@ -309,6 +309,23 @@ func (u *unifier) nify(x, y Type, mode unifyMode, p *ifacePair) (result bool) {
 		return false
 	}
 
+	// Const types: Two const types unify if their element types unify.
+	// For inexact unification, a const type also unifies with a non-const
+	// type if its element type does (a value of type T may be assigned to
+	// a variable of type const T), unless the non-const type is a bound
+	// type parameter (which may be inferred to be the const type itself).
+	if mode&exact == 0 {
+		cx, cy := asConst(x), asConst(y)
+		switch {
+		case cx != nil && cy != nil:
+			return u.nify(cx.elem, cy.elem, mode, p)
+		case cx != nil && u.asBoundTypeParam(y) == nil:
+			return u.nify(cx.elem, y, mode, p)
+		case cy != nil && u.asBoundTypeParam(x) == nil:
+			return u.nify(x, cy.elem, mode, p)
+		}
+	}
+
 	// Unification is symmetric, so we can swap the operands.
 	// Ensure that if we have at least one
 	// - defined type, make sure one is in y
@@ -625,6 +642,12 @@ func (u *unifier) nify(x, y Type, mode unifyMode, p *ifacePair) (result bool) {
 				}
 				return true
 			}
+		}
+
+	case *ConstType:
+		// Two const types unify if their element types unify.
+		if y, ok := y.(*ConstType); ok {
+			return u.nify(x.elem, y.elem, emode, p)
 		}
 
 	case *Pointer:

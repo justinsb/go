@@ -116,7 +116,7 @@ func isTypeParam(t types2.Type) bool {
 // isNotInHeap reports whether typ is or contains an element of type
 // internal/runtime/sys.NotInHeap.
 func isNotInHeap(typ types2.Type) bool {
-	typ = types2.Unalias(typ)
+	typ = types2.Unalias(unconst(typ))
 	if named, ok := typ.(*types2.Named); ok {
 		if obj := named.Obj(); obj.Name() == "nih" && obj.Pkg().Path() == "internal/runtime/sys" {
 			return true

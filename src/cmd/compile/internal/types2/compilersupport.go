@@ -9,7 +9,7 @@ package types2
 
 // If t is a pointer, AsPointer returns that type, otherwise it returns nil.
 func AsPointer(t Type) *Pointer {
-	u, _ := t.Underlying().(*Pointer)
+	u, _ := unconst(t).Underlying().(*Pointer)
 	return u
 }
 
@@ -20,14 +20,14 @@ func AsPointer(t Type) *Pointer {
 // is the restricted channel type if the restrictions are always the same.
 // If typ is not a type parameter, CoreType returns the underlying type.
 func CoreType(t Type) Type {
-	u, _ := commonUnder(t, nil)
+	u, _ := commonUnder(unconst(t), nil)
 	return u
 }
 
 // RangeKeyVal returns the key and value types for a range over typ.
 // It panics if range over typ is invalid.
 func RangeKeyVal(typ Type) (Type, Type) {
-	key, val, _, ok := rangeKeyVal(nil, typ, nil)
+	key, val, _, ok := rangeKeyVal(nil, unconst(typ), nil)
 	assert(ok)
 	return key, val
 }

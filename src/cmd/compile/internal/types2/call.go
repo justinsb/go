@@ -421,7 +421,7 @@ func (check *Checker) genericExprList(elist []syntax.Expr) (resList []*operand, 
 				// x is a function call returning multiple values; it cannot be generic.
 				resList = make([]*operand, t.Len())
 				for i, v := range t.vars {
-					resList[i] = &operand{mode_: value, expr: e, typ_: v.typ}
+					resList[i] = &operand{mode_: value, expr: e, typ_: eraseValueConst(v.typ)}
 				}
 			} else {
 				// x is exactly one value (possibly invalid or uninstantiated generic function).
@@ -822,7 +822,7 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 		goto Error
 	}
 
-	obj, index, indirect = lookupFieldOrMethod(x.typ(), x.mode() == variable, check.pkg, sel, false)
+	obj, index, indirect = lookupFieldOrMethod(x.typ(), x.addressable(), check.pkg, sel, false)
 	if obj == nil {
 		// Don't report another error if the underlying type was invalid (go.dev/issue/49541).
 		if !isValid(x.typ().Underlying()) {
@@ -848,7 +848,7 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 		if isInterfacePtr(x.typ()) {
 			why = check.interfacePtrError(x.typ())
 		} else {
-			alt, _, _ := lookupFieldOrMethod(x.typ(), x.mode() == variable, check.pkg, sel, true)
+			alt, _, _ := lookupFieldOrMethod(x.typ(), x.addressable(), check.pkg, sel, true)
 			why = check.lookupError(x.typ(), sel, alt, false)
 		}
 		check.errorf(e.Sel, MissingFieldOrMethod, "%s.%s undefined (%s)", x.expr, sel, why)
@@ -865,17 +865,32 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 
 		// field value
 		check.recordSelection(e, FieldVal, x.typ(), obj, index, indirect)
-		if x.mode() == variable || indirect {
+		// A field selected through a const (or otherwise read-only)
+		// operand is read-only and has a const view of the field type.
+		ro := x.readonly()
+		if x.addressable() || indirect {
 			x.mode_ = variable
+			if ro {
+				x.mode_ = rovariable
+			}
 		} else {
 			x.mode_ = value
 		}
 		x.typ_ = obj.typ
+		if ro {
+			x.typ_ = constView(obj.typ)
+		}
 
 	case *Func:
 		check.objDecl(obj) // ensure fully set-up signature
 		check.addDeclDep(obj)
 		// TODO(mark): Assert that sig.rparams is nil here?
+
+		// Only const methods may be selected through a const (or otherwise read-only) operand.
+		if (x.mode() == typexpr && isConst(x.typ()) || x.mode() != typexpr && x.readonly()) && !obj.isConstCallable() {
+			check.errorf(e.Sel, InvalidMethodExpr, "cannot call non-const method %s on const value %s", sel, x.expr)
+			goto Error
+		}
 
 		if x.mode() == typexpr {
 			// method expression

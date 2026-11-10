@@ -185,6 +185,10 @@ func (w *typeWriter) typ(typ Type) {
 		w.byte('*')
 		w.typ(t.base)
 
+	case *ConstType:
+		w.string("const ")
+		w.typ(t.elem)
+
 	case *Tuple:
 		w.tuple(t, false)
 

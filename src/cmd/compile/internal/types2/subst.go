@@ -129,6 +129,12 @@ func (subst *subster) typ(typ Type) Type {
 			return &Slice{elem: elem}
 		}
 
+	case *ConstType:
+		elem := subst.typOrNil(t.elem)
+		if elem != t.elem {
+			return NewConstType(elem)
+		}
+
 	case *Struct:
 		if fields := substList(t.fields, subst.var_); fields != nil {
 			s := &Struct{fields: fields, tags: t.tags}
@@ -250,6 +256,7 @@ func (subst *subster) typ(typ Type) Type {
 				params:   params,
 				results:  results,
 				variadic: t.variadic,
+				constRcv: t.constRcv,
 			}
 		}
 
