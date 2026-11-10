@@ -71,15 +71,15 @@ outer:
 				}
 				if seln.Kind() == types.MethodVal {
 					sig := seln.Obj().Type().(*types.Signature)
-					if is[*types.Pointer](sig.Recv().Type().Underlying()) {
+					if is[*types.Pointer](Unconst(sig.Recv().Type()).Underlying()) { // incl. const *T
 						t := seln.Recv()
 						// The receiver may be an embedded field, so we need
 						// to get the inner-most type (right before the method
 						// call in seln.Index())
 						for _, idx := range seln.Index()[:len(seln.Index())-1] {
-							t = t.Underlying().(*types.Struct).Field(idx).Type()
+							t = Unconst(t).Underlying().(*types.Struct).Field(idx).Type()
 						}
-						if !is[*types.Pointer](t.Underlying()) {
+						if !is[*types.Pointer](Unconst(t).Underlying()) {
 							return true // takes address of receiver
 						}
 					}
@@ -89,7 +89,7 @@ outer:
 		case edge.IndexExpr_X, edge.SliceExpr_X:
 			// If x[i] or x[i:j] is an lvalue,
 			// then x is an lvalue iff x is an array.
-			if !is[*types.Array](info.TypeOf(cur.Node().(ast.Expr)).Underlying()) {
+			if !is[*types.Array](Unconst(info.TypeOf(cur.Node().(ast.Expr))).Underlying()) {
 				return false
 			}
 		default:

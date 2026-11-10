@@ -66,6 +66,9 @@ func (w *Free) Has(typ types.Type) (res bool) {
 	case *types.Pointer:
 		return w.Has(t.Elem())
 
+	case *types.ConstType: // const T
+		return w.Has(t.Elem())
+
 	case *types.Tuple:
 		n := t.Len()
 		for i := range n {

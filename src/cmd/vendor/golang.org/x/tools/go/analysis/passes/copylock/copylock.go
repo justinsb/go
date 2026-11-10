@@ -289,6 +289,10 @@ func lockPath(tpkg *types.Package, typ types.Type, seen map[types.Type]bool) typ
 	}
 	seen[typ] = true
 
+	// A const T has the same representation as T:
+	// copying it copies any lock it contains.
+	typ = typesinternal.Unconst(typ)
+
 	if tpar, ok := types.Unalias(typ).(*types.TypeParam); ok {
 		terms, err := typeparams.StructuralTerms(tpar)
 		if err != nil {
@@ -323,7 +327,7 @@ func lockPath(tpkg *types.Package, typ types.Type, seen map[types.Type]bool) typ
 		if !ok {
 			break
 		}
-		typ = atyp.Elem()
+		typ = typesinternal.Unconst(atyp.Elem())
 	}
 
 	ttyp, ok := typ.Underlying().(*types.Tuple)

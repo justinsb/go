@@ -190,7 +190,7 @@ func (b *Buffer) Grow(n int) {
 // Write appends the contents of p to the buffer, growing the buffer as
 // needed. The return value n is the length of p; err is always nil. If the
 // buffer becomes too large, Write will panic with [ErrTooLarge].
-func (b *Buffer) Write(p []byte) (n int, err error) {
+func (b *Buffer) Write(p const []byte) (n int, err error) {
 	b.lastRead = opInvalid
 	m, ok := b.tryGrowByReslice(len(p))
 	if !ok {

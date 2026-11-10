@@ -82,5 +82,12 @@ func usedIdent(info *types.Info, e ast.Expr) *ast.Ident {
 //go:linkname interfaceMethod golang.org/x/tools/go/types/typeutil.interfaceMethod
 func interfaceMethod(f *types.Func) bool {
 	recv := f.Signature().Recv()
-	return recv != nil && types.IsInterface(recv.Type())
+	if recv == nil {
+		return false
+	}
+	t := recv.Type()
+	if c, ok := types.Unalias(t).(*types.ConstType); ok {
+		t = c.Elem() // receiver of a const interface method
+	}
+	return types.IsInterface(t)
 }

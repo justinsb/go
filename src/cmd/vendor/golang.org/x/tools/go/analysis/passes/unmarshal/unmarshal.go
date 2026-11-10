@@ -87,7 +87,7 @@ func run(pass *analysis.Pass) (any, error) {
 		}
 
 		t := pass.TypesInfo.Types[call.Args[argidx]].Type
-		switch t.Underlying().(type) {
+		switch typesinternal.Unconst(t).Underlying().(type) { // const *T is a pointer too
 		case *types.Pointer, *types.Interface, *types.TypeParam:
 			return
 		}

@@ -155,6 +155,9 @@ func walk(v *visitor, ek edge.Kind, index int, node ast.Node) {
 	case *ast.ChanType:
 		walk(v, edge.ChanType_Value, -1, n.Value)
 
+	case *ast.ConstType: // const T
+		walk(v, edge.ConstType_Elem, -1, n.Elem)
+
 	// Statements
 	case *ast.BadStmt:
 		// nothing to do

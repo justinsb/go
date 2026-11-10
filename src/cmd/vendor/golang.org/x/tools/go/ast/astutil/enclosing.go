@@ -268,6 +268,9 @@ func childrenOf(n ast.Node) []ast.Node {
 			children = append(children, tok(n.Begin, len("chan")))
 		}
 
+	case *ast.ConstType: // const T
+		children = append(children, tok(n.Const, len("const")))
+
 	case *ast.CommClause:
 		if n.Comm == nil {
 			children = append(children,
@@ -546,6 +549,8 @@ func NodeDescription(n ast.Node) string {
 		return "case clause"
 	case *ast.ChanType:
 		return "channel type"
+	case *ast.ConstType:
+		return "const type"
 	case *ast.CommClause:
 		return "communication clause"
 	case *ast.Comment:

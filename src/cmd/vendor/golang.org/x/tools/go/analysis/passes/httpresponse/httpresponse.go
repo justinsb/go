@@ -132,6 +132,7 @@ func isHTTPFuncOrMethodOnClient(info *types.Info, expr *ast.CallExpr) bool {
 		id, ok := fun.X.(*ast.Ident)
 		return ok && id.Name == "http" // function in net/http package.
 	}
+	typ = typesinternal.Unconst(typ) // look through const T
 
 	if typesinternal.IsTypeNamed(typ, "net/http", "Client") {
 		return true // method on http.Client.

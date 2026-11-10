@@ -31,6 +31,7 @@ func NoEffects(info *types.Info, expr ast.Expr) bool {
 		case *ast.ArrayType,
 			*ast.StructType,
 			*ast.ChanType,
+			*ast.ConstType, // const T
 			*ast.FuncType,
 			*ast.MapType,
 			*ast.InterfaceType:

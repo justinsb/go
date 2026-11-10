@@ -14,6 +14,7 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/internal/analysis/analyzerutil"
+	"golang.org/x/tools/internal/typesinternal"
 )
 
 //go:embed doc.go
@@ -112,7 +113,7 @@ func canonicalMethod(pass *analysis.Pass, id *ast.Ident) {
 	// Special case: Is, As and Unwrap only apply when type
 	// implements error.
 	if id.Name == "Is" || id.Name == "As" || id.Name == "Unwrap" {
-		if recv := sign.Recv(); recv == nil || !implementsError(recv.Type()) {
+		if recv := sign.Recv(); recv == nil || !implementsError(typesinternal.Unconst(recv.Type())) {
 			return
 		}
 	}
@@ -176,7 +177,8 @@ func matchParams(expect []string, actual *types.Tuple, prefix string) bool {
 		if i >= actual.Len() {
 			return false
 		}
-		if !matchParamType(x, actual.At(i).Type()) {
+		// A const T parameter or result is treated like T.
+		if !matchParamType(x, typesinternal.Unconst(actual.At(i).Type())) {
 			return false
 		}
 	}

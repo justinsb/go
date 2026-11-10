@@ -191,7 +191,8 @@ func (f *Finder) call(sig *types.Signature, args []ast.Expr) {
 			f.assign(sig.Params().At(i).Type(), argtype)
 		}
 		// Remaining args are assigned to elements of varargs slice.
-		tElem := sig.Params().At(nnormals).Type().(*types.Slice).Elem()
+		// (CoreType looks through const []T, the type of a const ...T parameter.)
+		tElem := typeparams.CoreType(sig.Params().At(nnormals).Type()).(*types.Slice).Elem()
 		for i := nnormals; i < len(argtypes); i++ {
 			f.assign(tElem, argtypes[i])
 		}
@@ -273,6 +274,14 @@ func (f *Finder) valueSpec(spec *ast.ValueSpec) {
 // types are uninteresting (e.g. lhs is a concrete type, or the empty
 // interface; rhs has no methods).
 func (f *Finder) assign(lhs, rhs types.Type) {
+	// A const type (const T) is a read-only view of T:
+	// record the constraint between the element types.
+	if c, ok := types.Unalias(lhs).(*types.ConstType); ok {
+		lhs = c.Elem()
+	}
+	if c, ok := types.Unalias(rhs).(*types.ConstType); ok {
+		rhs = c.Elem()
+	}
 	if types.Identical(lhs, rhs) {
 		return
 	}

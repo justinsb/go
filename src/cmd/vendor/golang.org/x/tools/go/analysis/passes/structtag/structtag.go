@@ -19,6 +19,8 @@ import (
 
 	"fmt"
 
+	"golang.org/x/tools/internal/typesinternal"
+
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
@@ -152,7 +154,7 @@ func checkTagDuplicates(pass *analysis.Pass, tag, key string, nearest, field *ty
 			// Ignored if the field isn't anonymous.
 			return
 		}
-		typ, ok := field.Type().Underlying().(*types.Struct)
+		typ, ok := typesinternal.Unconst(field.Type()).Underlying().(*types.Struct) // look through const T
 		if !ok {
 			return
 		}

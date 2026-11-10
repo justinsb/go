@@ -209,6 +209,8 @@ func isComplicatedType(t types.Type) bool {
 			return true
 		case *types.Pointer:
 			return check(t.Elem())
+		case *types.ConstType: // const T
+			return check(t.Elem())
 		case *types.Slice:
 			return check(t.Elem())
 		case *types.Array:

@@ -311,6 +311,9 @@ func (a *application) apply(parent ast.Node, name string, iter *iterator, n ast.
 	case *ast.ChanType:
 		a.apply(n, "Value", nil, n.Value)
 
+	case *ast.ConstType: // const T
+		a.apply(n, "Elem", nil, n.Elem)
+
 	// Statements
 	case *ast.BadStmt:
 		// nothing to do

@@ -782,6 +782,9 @@ func (st *falconState) expr(e ast.Expr) (res any) { // = types.TypeAndValue | as
 
 	case *ast.ChanType:
 		_ = st.expr(e.Value)
+
+	case *ast.ConstType: // const T
+		_ = st.expr(e.Elem)
 	}
 	return
 }

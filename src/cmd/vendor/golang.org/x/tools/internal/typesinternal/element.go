@@ -82,6 +82,9 @@ func ForEachElement(rtypes *typeutil.Map, msets *typeutil.MethodSetCache, T type
 		case *types.Pointer:
 			visit(T.Elem(), false)
 
+		case *types.ConstType: // const T
+			visit(T.Elem(), false)
+
 		case *types.Slice:
 			visit(T.Elem(), false)
 

@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/internal/analysis/analyzerutil"
+	"golang.org/x/tools/internal/typesinternal"
 )
 
 const Doc = "report mismatches between assembly files and Go declarations"
@@ -437,7 +438,7 @@ Files:
 }
 
 func asmKindForType(t types.Type, size int) asmKind {
-	switch t := t.Underlying().(type) {
+	switch t := typesinternal.Unconst(t).Underlying().(type) { // const T has the same layout as T
 	case *types.Basic:
 		switch t.Kind() {
 		case types.String:
@@ -527,7 +528,7 @@ func appendComponentsRecursive(arch *asmArch, t types.Type, cc []component, suff
 		cc = append(cc, newComponent(suffix+"_imag", asmKind(fsize), fmt.Sprintf("imag(complex%d)", size*8), off+fsize, fsize, suffix))
 
 	case asmStruct:
-		tu := t.Underlying().(*types.Struct)
+		tu := typesinternal.Unconst(t).Underlying().(*types.Struct)
 		fields := make([]*types.Var, tu.NumFields())
 		for i := 0; i < tu.NumFields(); i++ {
 			fields[i] = tu.Field(i)
@@ -538,7 +539,7 @@ func appendComponentsRecursive(arch *asmArch, t types.Type, cc []component, suff
 		}
 
 	case asmArray:
-		tu := t.Underlying().(*types.Array)
+		tu := typesinternal.Unconst(t).Underlying().(*types.Array)
 		elem := tu.Elem()
 		// Calculate offset of each element array.
 		fields := []*types.Var{
@@ -577,6 +578,11 @@ func asmParseDecl(pass *analysis.Pass, decl *ast.FuncDecl) map[string]*asmFunc {
 				if ell, ok := fld.Type.(*ast.Ellipsis); ok {
 					t = types.NewSlice(pass.TypesInfo.Types[ell.Elt].Type)
 				}
+			}
+			// A const T parameter (including const ...T)
+			// has the same layout as T.
+			if t != nil {
+				t = typesinternal.Unconst(t)
 			}
 
 			align := int(arch.sizes.Alignof(t))

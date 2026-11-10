@@ -16,6 +16,11 @@ import (
 // TODO(mkalil): We should eventually consider removing all uses of CoreType.
 func CoreType(T types.Type) types.Type {
 	U := T.Underlying()
+	// A const type (const E) is a read-only view with the same
+	// structure as E: report the core type of E.
+	if c, ok := U.(*types.ConstType); ok {
+		return CoreType(c.Elem())
+	}
 	if _, ok := U.(*types.Interface); !ok {
 		return U // for non-interface types,
 	}

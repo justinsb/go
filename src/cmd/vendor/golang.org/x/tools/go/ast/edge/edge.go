@@ -166,12 +166,15 @@ const (
 	ValueSpec_Type
 	ValueSpec_Values
 
+	// Added for const types (const T); appended to keep numbering stable.
+	ConstType_Elem
+
 	maxKind
 )
 
 // Assert that the encoding fits in 7 bits,
 // as the inspector relies on this.
-// (We are currently at 104.)
+// (We are currently at 105.)
 var _ = [1 << 7]struct{}{}[maxKind]
 
 type fieldInfo struct {
@@ -296,4 +299,5 @@ var fieldInfos = [...]fieldInfo{
 	ValueSpec_Names:       info[*ast.ValueSpec]("Names"),
 	ValueSpec_Type:        info[*ast.ValueSpec]("Type"),
 	ValueSpec_Values:      info[*ast.ValueSpec]("Values"),
+	ConstType_Elem:        info[*ast.ConstType]("Elem"),
 }

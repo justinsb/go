@@ -84,7 +84,7 @@ func (b *Builder) Grow(n int) {
 
 // Write appends the contents of p to b's buffer.
 // Write always returns len(p), nil.
-func (b *Builder) Write(p []byte) (int, error) {
+func (b *Builder) Write(p const []byte) (int, error) {
 	b.copyCheck()
 	b.buf = append(b.buf, p...)
 	return len(p), nil

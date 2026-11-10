@@ -448,6 +448,8 @@ func typenames(t types.Type) []*types.TypeName {
 			tns = append(tns, t.Obj())
 		case *types.Pointer:
 			visit(t.Elem())
+		case *types.ConstType: // const T
+			visit(t.Elem())
 		case *types.Slice:
 			visit(t.Elem())
 		case *types.Array:

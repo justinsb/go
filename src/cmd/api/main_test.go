@@ -878,6 +878,10 @@ func (w *Walker) writeType(buf *bytes.Buffer, typ types.Type) {
 		// Type parameter names may change, so use a placeholder instead.
 		fmt.Fprintf(buf, "$%d", typ.Index())
 
+	case *types.ConstType:
+		buf.WriteString("const ")
+		w.writeType(buf, typ.Elem())
+
 	default:
 		panic(fmt.Sprintf("unknown type %T", typ))
 	}
@@ -925,6 +929,11 @@ func (w *Walker) writeParams(buf *bytes.Buffer, t *types.Tuple, variadic bool) {
 		}
 		typ := t.At(i).Type()
 		if variadic && i+1 == n {
+			if c, ok := typ.(*types.ConstType); ok {
+				// const variadic parameter
+				buf.WriteString("const ")
+				typ = c.Elem()
+			}
 			buf.WriteString("...")
 			typ = typ.(*types.Slice).Elem()
 		}

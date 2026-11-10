@@ -121,6 +121,10 @@ func convert(T, x ast.Expr) *ast.CallExpr {
 	if ch, ok := T.(*ast.ChanType); ok && ch.Dir == ast.RECV {
 		T = &ast.ParenExpr{X: T}
 	}
+	// A const type must be parenthesized: (const T)(x).
+	if _, ok := T.(*ast.ConstType); ok {
+		T = &ast.ParenExpr{X: T}
+	}
 	return &ast.CallExpr{
 		Fun:  T,
 		Args: []ast.Expr{x},

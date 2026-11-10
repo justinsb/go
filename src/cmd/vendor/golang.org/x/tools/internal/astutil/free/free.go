@@ -309,6 +309,9 @@ func (v *freeVisitor) walkRecvFieldType(list *ast.FieldList) {
 	}
 	for _, f := range list.List { // valid => len=1
 		typ := f.Type
+		if c, ok := typ.(*ast.ConstType); ok {
+			typ = c.Elem // const receiver: const T or const *T
+		}
 		if ptr, ok := typ.(*ast.StarExpr); ok {
 			typ = ptr.X
 		}

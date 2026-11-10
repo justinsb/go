@@ -33,6 +33,10 @@ import (
 // See [ZeroExpr] for a variant that returns an [ast.Expr].
 func ZeroString(t types.Type, qual types.Qualifier) (_ string, isValid bool) {
 	switch t := t.(type) {
+	case *types.ConstType:
+		// const T has the same zero value as T.
+		return ZeroString(t.Elem(), qual)
+
 	case *types.Basic:
 		switch {
 		case t.Info()&types.IsBoolean != 0:
@@ -126,6 +130,10 @@ func ZeroString(t types.Type, qual types.Qualifier) (_ string, isValid bool) {
 // See [ZeroString] for a variant that returns a string.
 func ZeroExpr(t types.Type, qual types.Qualifier) (_ ast.Expr, isValid bool) {
 	switch t := t.(type) {
+	case *types.ConstType:
+		// const T has the same zero value as T.
+		return ZeroExpr(t.Elem(), qual)
+
 	case *types.Basic:
 		switch {
 		case t.Info()&types.IsBoolean != 0:
@@ -226,6 +234,11 @@ func TypeExpr(t types.Type, qual types.Qualifier) ast.Expr {
 			X:  TypeExpr(t.Elem(), qual),
 		}
 
+	case *types.ConstType: // const T
+		return &ast.ConstType{
+			Elem: TypeExpr(t.Elem(), qual),
+		}
+
 	case *types.Array:
 		return &ast.ArrayType{
 			Len: &ast.BasicLit{
@@ -270,7 +283,12 @@ func TypeExpr(t types.Type, qual types.Qualifier) ast.Expr {
 		}
 		if t.Variadic() {
 			last := params[len(params)-1]
-			last.Type = &ast.Ellipsis{Elt: last.Type.(*ast.ArrayType).Elt}
+			if c, ok := last.Type.(*ast.ConstType); ok {
+				// const variadic parameter: const []T => const ...T
+				c.Elem = &ast.Ellipsis{Elt: c.Elem.(*ast.ArrayType).Elt}
+			} else {
+				last.Type = &ast.Ellipsis{Elt: last.Type.(*ast.ArrayType).Elt}
+			}
 		}
 		var returns []*ast.Field
 		for v := range t.Results().Variables() {

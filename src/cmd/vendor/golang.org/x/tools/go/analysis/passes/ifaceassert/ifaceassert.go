@@ -14,6 +14,7 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 	"golang.org/x/tools/internal/analysis/analyzerutil"
 	"golang.org/x/tools/internal/typeparams"
+	"golang.org/x/tools/internal/typesinternal"
 )
 
 //go:embed doc.go
@@ -35,8 +36,9 @@ func assertableTo(free *typeparams.Free, v, t types.Type) *types.Func {
 		return nil
 	}
 	// ensure that v and t are interfaces
-	V, _ := v.Underlying().(*types.Interface)
-	T, _ := t.Underlying().(*types.Interface)
+	// (looking through const types: const I is an interface too)
+	V, _ := typesinternal.Unconst(v).Underlying().(*types.Interface)
+	T, _ := typesinternal.Unconst(t).Underlying().(*types.Interface)
 	if V == nil || T == nil {
 		return nil
 	}

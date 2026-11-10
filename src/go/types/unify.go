@@ -83,6 +83,7 @@ type unifier struct {
 	handles                  map[*TypeParam]*Type
 	depth                    int  // recursion depth during unification
 	enableInterfaceInference bool // use shared methods for better inference
+	sigDepth                 int  // if > 0, recursion depth of the parameters and results of the signature being unified
 }
 
 // newUnifier returns a new unifier initialized with the given type parameter
@@ -103,7 +104,7 @@ func newUnifier(check *Checker, tparams []*TypeParam, targs []Type, enableInterf
 		}
 		handles[x] = &t
 	}
-	return &unifier{check, handles, 0, enableInterfaceInference}
+	return &unifier{check, handles, 0, enableInterfaceInference, 0}
 }
 
 // unifyMode controls the behavior of the unifier.
@@ -313,11 +314,15 @@ func (u *unifier) nify(x, y Type, mode unifyMode, p *ifacePair) (result bool) {
 	}
 
 	// Const types: Two const types unify if their element types unify.
-	// For inexact unification, a const type also unifies with a non-const
-	// type if its element type does (a value of type T may be assigned to
-	// a variable of type const T), unless the non-const type is a bound
-	// type parameter (which may be inferred to be the const type itself).
-	if mode&exact == 0 {
+	// A const type also unifies with a non-const type if its element type
+	// does, unless the non-const type is a bound type parameter (which is
+	// handled below and may be inferred to be the const type itself).
+	// This is more lenient than type identity, even for exact unification:
+	// a value of type T may be assigned to a variable of type const T, and
+	// function types that differ only in const qualifiers may be assignable
+	// (see constCompatible). If unification succeeds for types that are not
+	// assignable, the error is reported when the inferred types are verified.
+	{
 		cx, cy := asConst(x), asConst(y)
 		switch {
 		case cx != nil && cy != nil:
@@ -444,6 +449,12 @@ func (u *unifier) nify(x, y Type, mode unifyMode, p *ifacePair) (result bool) {
 				// If we have defined and literal channel types, a defined type wins to avoid
 				// order dependencies.
 				if mode&exact == 0 {
+					// If we have inexact unification and y is a const type but x is not,
+					// select y: a value of type x remains assignable to const x.
+					if isConst(y) && !isConst(x) {
+						u.set(px, y)
+						return true
+					}
 					switch {
 					case xn:
 						// x is a defined type: nothing to do.
@@ -463,6 +474,15 @@ func (u *unifier) nify(x, y Type, mode unifyMode, p *ifacePair) (result bool) {
 			return false
 		}
 		// otherwise, infer type from y
+		// If y is a const parameter or result type of a function type, infer
+		// the non-const type: function types that differ only in the constness
+		// of their parameters and results may still be assignable (see
+		// constCompatible), and the non-const type is the more general choice.
+		// If necessary, the inferred type is changed to the const type later
+		// (see above).
+		if u.sigDepth > 0 && u.depth == u.sigDepth {
+			y = unconst(y)
+		}
 		u.set(px, y)
 		return true
 	}
@@ -683,6 +703,10 @@ func (u *unifier) nify(x, y Type, mode unifyMode, p *ifacePair) (result bool) {
 		// Parameter and result names are not required to match.
 		// TODO(gri) handle type parameters or document why we can ignore them.
 		if y, ok := y.(*Signature); ok {
+			// Parameters and results are unified two levels down
+			// (signature -> tuple -> parameter); see use of sigDepth.
+			defer func(d int) { u.sigDepth = d }(u.sigDepth)
+			u.sigDepth = u.depth + 2
 			return x.variadic == y.variadic &&
 				u.nify(x.params, y.params, emode, p) &&
 				u.nify(x.results, y.results, emode, p)

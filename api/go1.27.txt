@@ -315,3 +315,86 @@ pkg uuid, method (UUID) Compare(UUID) int #62026
 pkg uuid, method (UUID) MarshalText() ([]uint8, error) #62026
 pkg uuid, method (UUID) String() string #62026
 pkg uuid, type UUID [16]uint8 #62026
+pkg bytes, func Clone(const []uint8) []uint8 #22876
+pkg bytes, func Equal(const []uint8, const []uint8) bool #22876
+pkg bytes, method (*Buffer) Write(const []uint8) (int, error) #22876
+pkg fmt, func Append([]uint8, const ...interface{}) []uint8 #22876
+pkg fmt, func Appendf([]uint8, string, const ...interface{}) []uint8 #22876
+pkg fmt, func Appendln([]uint8, const ...interface{}) []uint8 #22876
+pkg fmt, func Errorf(string, const ...interface{}) error #22876
+pkg fmt, func Fprint(io.Writer, const ...interface{}) (int, error) #22876
+pkg fmt, func Fprintf(io.Writer, string, const ...interface{}) (int, error) #22876
+pkg fmt, func Fprintln(io.Writer, const ...interface{}) (int, error) #22876
+pkg fmt, func Print(const ...interface{}) (int, error) #22876
+pkg fmt, func Printf(string, const ...interface{}) (int, error) #22876
+pkg fmt, func Println(const ...interface{}) (int, error) #22876
+pkg fmt, func Sprint(const ...interface{}) string #22876
+pkg fmt, func Sprintf(string, const ...interface{}) string #22876
+pkg fmt, func Sprintln(const ...interface{}) string #22876
+pkg go/ast, method (*ConstType) End() token.Pos #22876
+pkg go/ast, method (*ConstType) Pos() token.Pos #22876
+pkg go/ast, type ConstType struct #22876
+pkg go/ast, type ConstType struct, Const token.Pos #22876
+pkg go/ast, type ConstType struct, Elem Expr #22876
+pkg go/types, func IdenticalIgnoreConst(Type, Type) bool #22876
+pkg go/types, func NewConstType(Type) *ConstType #22876
+pkg go/types, method (*ConstType) Elem() Type #22876
+pkg go/types, method (*ConstType) String() string #22876
+pkg go/types, method (*ConstType) Underlying() Type #22876
+pkg go/types, method (*Signature) ConstMethod() bool #22876
+pkg go/types, method (*Signature) SetConstMethod(bool) #22876
+pkg go/types, type ConstType struct #22876
+pkg log, func Fatal(const ...interface{}) #22876
+pkg log, func Fatalf(string, const ...interface{}) #22876
+pkg log, func Fatalln(const ...interface{}) #22876
+pkg log, func Panic(const ...interface{}) #22876
+pkg log, func Panicf(string, const ...interface{}) #22876
+pkg log, func Panicln(const ...interface{}) #22876
+pkg log, func Print(const ...interface{}) #22876
+pkg log, func Printf(string, const ...interface{}) #22876
+pkg log, func Println(const ...interface{}) #22876
+pkg log, method (*Logger) Fatal(const ...interface{}) #22876
+pkg log, method (*Logger) Fatalf(string, const ...interface{}) #22876
+pkg log, method (*Logger) Fatalln(const ...interface{}) #22876
+pkg log, method (*Logger) Panic(const ...interface{}) #22876
+pkg log, method (*Logger) Panicf(string, const ...interface{}) #22876
+pkg log, method (*Logger) Panicln(const ...interface{}) #22876
+pkg log, method (*Logger) Print(const ...interface{}) #22876
+pkg log, method (*Logger) Printf(string, const ...interface{}) #22876
+pkg log, method (*Logger) Println(const ...interface{}) #22876
+pkg slices, func Contains[$0 interface{ ~[]$1 }, $1 comparable](const $0, $1) bool #22876
+pkg slices, func Equal[$0 interface{ ~[]$1 }, $1 comparable](const $0, const $0) bool #22876
+pkg slices, func Index[$0 interface{ ~[]$1 }, $1 comparable](const $0, $1) int #22876
+pkg strings, method (*Builder) Write(const []uint8) (int, error) #22876
+pkg testing, method (*B) Error(const ...interface{}) #22876
+pkg testing, method (*B) Errorf(string, const ...interface{}) #22876
+pkg testing, method (*B) Fatal(const ...interface{}) #22876
+pkg testing, method (*B) Fatalf(string, const ...interface{}) #22876
+pkg testing, method (*B) Log(const ...interface{}) #22876
+pkg testing, method (*B) Logf(string, const ...interface{}) #22876
+pkg testing, method (*B) Skip(const ...interface{}) #22876
+pkg testing, method (*B) Skipf(string, const ...interface{}) #22876
+pkg testing, method (*F) Error(const ...interface{}) #22876
+pkg testing, method (*F) Errorf(string, const ...interface{}) #22876
+pkg testing, method (*F) Fatal(const ...interface{}) #22876
+pkg testing, method (*F) Fatalf(string, const ...interface{}) #22876
+pkg testing, method (*F) Log(const ...interface{}) #22876
+pkg testing, method (*F) Logf(string, const ...interface{}) #22876
+pkg testing, method (*F) Skip(const ...interface{}) #22876
+pkg testing, method (*F) Skipf(string, const ...interface{}) #22876
+pkg testing, method (*T) Error(const ...interface{}) #22876
+pkg testing, method (*T) Errorf(string, const ...interface{}) #22876
+pkg testing, method (*T) Fatal(const ...interface{}) #22876
+pkg testing, method (*T) Fatalf(string, const ...interface{}) #22876
+pkg testing, method (*T) Log(const ...interface{}) #22876
+pkg testing, method (*T) Logf(string, const ...interface{}) #22876
+pkg testing, method (*T) Skip(const ...interface{}) #22876
+pkg testing, method (*T) Skipf(string, const ...interface{}) #22876
+pkg testing, type TB interface, Error(const ...interface{}) #22876
+pkg testing, type TB interface, Errorf(string, const ...interface{}) #22876
+pkg testing, type TB interface, Fatal(const ...interface{}) #22876
+pkg testing, type TB interface, Fatalf(string, const ...interface{}) #22876
+pkg testing, type TB interface, Log(const ...interface{}) #22876
+pkg testing, type TB interface, Logf(string, const ...interface{}) #22876
+pkg testing, type TB interface, Skip(const ...interface{}) #22876
+pkg testing, type TB interface, Skipf(string, const ...interface{}) #22876

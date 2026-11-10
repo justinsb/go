@@ -992,6 +992,9 @@ func (p *printer) expr1(expr ast.Expr, prec1, depth int) {
 		switch t := x.Fun.(type) {
 		case *ast.FuncType:
 			paren = true
+		case *ast.ConstType:
+			// (const T)(x) is clearer than const T(x)
+			paren = true
 		case *ast.ChanType:
 			paren = t.Dir == ast.RECV
 		}

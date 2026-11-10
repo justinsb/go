@@ -66,6 +66,9 @@ func mapsloop(pass *analysis.Pass) (any, error) {
 
 		// Is x a map or iter.Seq2?
 		tx := types.Unalias(info.TypeOf(x))
+		if is[*types.ConstType](tx) {
+			return // const map[K]V does not satisfy ~map[K]V
+		}
 		var xmap bool
 		switch typeparams.CoreType(tx).(type) {
 		case *types.Map:

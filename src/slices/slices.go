@@ -17,7 +17,7 @@ import (
 // comparison stops at the first unequal pair.
 // Empty and nil slices are considered equal.
 // Floating point NaNs are not considered equal.
-func Equal[S ~[]E, E comparable](s1, s2 S) bool {
+func Equal[S ~[]E, E comparable](s1, s2 const S) bool {
 	if len(s1) != len(s2) {
 		return false
 	}
@@ -93,7 +93,7 @@ func CompareFunc[S1 ~[]E1, S2 ~[]E2, E1, E2 any](s1 S1, s2 S2, cmp func(E1, E2) 
 
 // Index returns the index of the first occurrence of v in s,
 // or -1 if not present.
-func Index[S ~[]E, E comparable](s S, v E) int {
+func Index[S ~[]E, E comparable](s const S, v E) int {
 	for i := range s {
 		if v == s[i] {
 			return i
@@ -114,7 +114,7 @@ func IndexFunc[S ~[]E, E any](s S, f func(E) bool) int {
 }
 
 // Contains reports whether v is present in s.
-func Contains[S ~[]E, E comparable](s S, v E) bool {
+func Contains[S ~[]E, E comparable](s const S, v E) bool {
 	return Index(s, v) >= 0
 }
 

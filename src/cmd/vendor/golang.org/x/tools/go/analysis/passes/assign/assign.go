@@ -138,7 +138,7 @@ func run(pass *analysis.Pass) (any, error) {
 func isMapIndex(info *types.Info, e ast.Expr) bool {
 	if idx, ok := ast.Unparen(e).(*ast.IndexExpr); ok {
 		if typ := info.Types[idx.X].Type; typ != nil {
-			_, ok := typ.Underlying().(*types.Map)
+			_, ok := typesinternal.Unconst(typ).Underlying().(*types.Map) // look through const T
 			return ok
 		}
 	}

@@ -9,6 +9,8 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+
+	"golang.org/x/tools/internal/typesinternal"
 )
 
 // escape implements a simple "address-taken" escape analysis. It
@@ -43,12 +45,12 @@ func escape(info *types.Info, root ast.Node, f func(v *types.Var, escapes bool))
 			// whether any of them is an array.
 			//
 			// We assume TypeOf returns non-nil.
-			if _, ok := info.TypeOf(e.X).Underlying().(*types.Array); ok {
+			if _, ok := typesinternal.Unconst(info.TypeOf(e.X)).Underlying().(*types.Array); ok {
 				lvalue(e.X, escapes) // &a[i] on array
 			}
 		case *ast.SelectorExpr:
 			// We assume TypeOf returns non-nil.
-			if _, ok := info.TypeOf(e.X).Underlying().(*types.Struct); ok {
+			if _, ok := typesinternal.Unconst(info.TypeOf(e.X)).Underlying().(*types.Struct); ok {
 				lvalue(e.X, escapes) // &s.f on struct
 			}
 		case *ast.StarExpr:

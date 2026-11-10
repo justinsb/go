@@ -350,6 +350,18 @@ func (impl) M(p const *T) []int { return nil }
 
 var _ RI = impl{}
 
+// type inference with const-compatible function arguments
+func eqFunc[S1 ~[]E1, S2 ~[]E2, E1, E2 any](s1 S1, s2 S2, eq func(E1, E2) bool) bool { return true }
+func eqConst(a, b const []byte) bool                                                 { return true }
+func apply[E any](f func(E), x E)                                                    {}
+
+func inferConst(t const *T, mt *T) {
+	_ = eqFunc([][]byte{}, [][]byte{}, eqConst)
+	apply(func(const *T) {}, t)
+	apply(func(const *T) {}, mt)
+	_ = Index([]int{}, 1)
+}
+
 func qbad(t const *T, args const ...any) {
 	args /* ERROR "read-only" */[0] = 1
 	wrap("x", args /* ERROR "discards const" */...)

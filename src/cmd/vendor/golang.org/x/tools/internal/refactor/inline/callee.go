@@ -790,7 +790,8 @@ func analyzeAssignment(info *types.Info, stack []ast.Node) (assignable, ifaceAss
 // index in call, if valid.
 func paramTypeAtIndex(sig *types.Signature, call *ast.CallExpr, index int) types.Type {
 	if plen := sig.Params().Len(); sig.Variadic() && index >= plen-1 && !call.Ellipsis.IsValid() {
-		if s, ok := sig.Params().At(plen - 1).Type().(*types.Slice); ok {
+		// (The type is const []T for a const variadic parameter, const ...T.)
+		if s, ok := typesinternal.Unconst(sig.Params().At(plen - 1).Type()).(*types.Slice); ok {
 			return s.Elem()
 		}
 	} else if index < plen {

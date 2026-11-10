@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/internal/typeparams"
+	"golang.org/x/tools/internal/typesinternal"
 )
 
 var errorType = types.Universe.Lookup("error").Type().Underlying().(*types.Interface)
@@ -57,6 +58,10 @@ type argMatcher struct {
 // matches among the constituents of their type set, as type arguments will
 // replace the type parameter at compile time.
 func (m *argMatcher) match(typ types.Type, topLevel bool) bool {
+	// A const type (const T) is a static read-only view of a T:
+	// fmt sees (and formats) a T.
+	typ = typesinternal.Unconst(typ)
+
 	// %w accepts only errors.
 	if m.t == argError {
 		return types.ConvertibleTo(typ, errorType)
@@ -182,7 +187,7 @@ func (m *argMatcher) match(typ types.Type, topLevel bool) bool {
 			return true // We don't know whether the logic below applies. Give up.
 		}
 
-		under := typ.Elem().Underlying()
+		under := typesinternal.Unconst(typ.Elem()).Underlying() // *const T prints like *T
 		switch under.(type) {
 		case *types.Struct: // see below
 		case *types.Array: // see below

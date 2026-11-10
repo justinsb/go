@@ -342,7 +342,7 @@ func typeOKForCgoCall(t types.Type, m map[types.Type]bool) bool {
 		return true
 	}
 	m[t] = true
-	switch t := t.Underlying().(type) {
+	switch t := typesinternal.Unconst(t).Underlying().(type) { // const T has the same representation as T
 	case *types.Chan, *types.Map, *types.Signature, *types.Slice:
 		return false
 	case *types.Pointer:

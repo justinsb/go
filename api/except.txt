@@ -610,3 +610,73 @@ pkg syscall (openbsd-386), const ELAST = 91
 pkg syscall (openbsd-386-cgo), const ELAST = 91
 pkg syscall (openbsd-amd64), const ELAST = 91
 pkg syscall (openbsd-amd64-cgo), const ELAST = 91
+pkg bytes, func Clone([]uint8) []uint8
+pkg bytes, func Equal([]uint8, []uint8) bool
+pkg bytes, method (*Buffer) Write([]uint8) (int, error)
+pkg fmt, func Append([]uint8, ...interface{}) []uint8
+pkg fmt, func Appendf([]uint8, string, ...interface{}) []uint8
+pkg fmt, func Appendln([]uint8, ...interface{}) []uint8
+pkg fmt, func Errorf(string, ...interface{}) error
+pkg fmt, func Fprint(io.Writer, ...interface{}) (int, error)
+pkg fmt, func Fprintf(io.Writer, string, ...interface{}) (int, error)
+pkg fmt, func Fprintln(io.Writer, ...interface{}) (int, error)
+pkg fmt, func Print(...interface{}) (int, error)
+pkg fmt, func Printf(string, ...interface{}) (int, error)
+pkg fmt, func Println(...interface{}) (int, error)
+pkg fmt, func Sprint(...interface{}) string
+pkg fmt, func Sprintf(string, ...interface{}) string
+pkg fmt, func Sprintln(...interface{}) string
+pkg log, func Fatal(...interface{})
+pkg log, func Fatalf(string, ...interface{})
+pkg log, func Fatalln(...interface{})
+pkg log, func Panic(...interface{})
+pkg log, func Panicf(string, ...interface{})
+pkg log, func Panicln(...interface{})
+pkg log, func Print(...interface{})
+pkg log, func Printf(string, ...interface{})
+pkg log, func Println(...interface{})
+pkg log, method (*Logger) Fatal(...interface{})
+pkg log, method (*Logger) Fatalf(string, ...interface{})
+pkg log, method (*Logger) Fatalln(...interface{})
+pkg log, method (*Logger) Panic(...interface{})
+pkg log, method (*Logger) Panicf(string, ...interface{})
+pkg log, method (*Logger) Panicln(...interface{})
+pkg log, method (*Logger) Print(...interface{})
+pkg log, method (*Logger) Printf(string, ...interface{})
+pkg log, method (*Logger) Println(...interface{})
+pkg slices, func Contains[$0 interface{ ~[]$1 }, $1 comparable]($0, $1) bool
+pkg slices, func Equal[$0 interface{ ~[]$1 }, $1 comparable]($0, $0) bool
+pkg slices, func Index[$0 interface{ ~[]$1 }, $1 comparable]($0, $1) int
+pkg strings, method (*Builder) Write([]uint8) (int, error)
+pkg testing, method (*B) Error(...interface{})
+pkg testing, method (*B) Errorf(string, ...interface{})
+pkg testing, method (*B) Fatal(...interface{})
+pkg testing, method (*B) Fatalf(string, ...interface{})
+pkg testing, method (*B) Log(...interface{})
+pkg testing, method (*B) Logf(string, ...interface{})
+pkg testing, method (*B) Skip(...interface{})
+pkg testing, method (*B) Skipf(string, ...interface{})
+pkg testing, method (*F) Error(...interface{})
+pkg testing, method (*F) Errorf(string, ...interface{})
+pkg testing, method (*F) Fatal(...interface{})
+pkg testing, method (*F) Fatalf(string, ...interface{})
+pkg testing, method (*F) Log(...interface{})
+pkg testing, method (*F) Logf(string, ...interface{})
+pkg testing, method (*F) Skip(...interface{})
+pkg testing, method (*F) Skipf(string, ...interface{})
+pkg testing, method (*T) Error(...interface{})
+pkg testing, method (*T) Errorf(string, ...interface{})
+pkg testing, method (*T) Fatal(...interface{})
+pkg testing, method (*T) Fatalf(string, ...interface{})
+pkg testing, method (*T) Log(...interface{})
+pkg testing, method (*T) Logf(string, ...interface{})
+pkg testing, method (*T) Skip(...interface{})
+pkg testing, method (*T) Skipf(string, ...interface{})
+pkg testing, type TB interface, Error(...interface{})
+pkg testing, type TB interface, Errorf(string, ...interface{})
+pkg testing, type TB interface, Fatal(...interface{})
+pkg testing, type TB interface, Fatalf(string, ...interface{})
+pkg testing, type TB interface, Log(...interface{})
+pkg testing, type TB interface, Logf(string, ...interface{})
+pkg testing, type TB interface, Skip(...interface{})
+pkg testing, type TB interface, Skipf(string, ...interface{})

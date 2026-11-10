@@ -269,7 +269,7 @@ func forbiddenMethod(info *types.Info, call *ast.CallExpr) (*types.Var, *types.S
 
 func formatMethod(sel *types.Selection, fn *types.Func) string {
 	var ptr string
-	rtype := sel.Recv()
+	rtype := typesinternal.Unconst(sel.Recv()) // look through const T
 	if p, ok := types.Unalias(rtype).(*types.Pointer); ok {
 		ptr = "*"
 		rtype = p.Elem()

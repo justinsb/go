@@ -249,6 +249,9 @@ func (h hasher) hash(t types.Type) uint32 {
 	case *types.Pointer:
 		return 9067 + 2*h.hash(t.Elem())
 
+	case *types.ConstType: // const T
+		return 9151 + 2*h.hash(t.Elem())
+
 	case *types.Signature:
 		var hash uint32 = 9091
 		if t.Variadic() {
@@ -436,6 +439,9 @@ func (h hasher) shallowHash(t types.Type) uint32 {
 
 	case *types.Pointer:
 		return 4393139
+
+	case *types.ConstType: // const T
+		return 9151
 
 	case *types.Union:
 		return 562448657

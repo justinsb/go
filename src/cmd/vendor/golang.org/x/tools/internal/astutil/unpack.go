@@ -24,6 +24,8 @@ L: // unpack receiver type
 		switch t := rtyp.(type) {
 		case *ast.ParenExpr:
 			rtyp = t.X
+		case *ast.ConstType: // const receiver: const T or const *T
+			rtyp = t.Elem
 		case *ast.StarExpr:
 			ptr = true
 			rtyp = t.X

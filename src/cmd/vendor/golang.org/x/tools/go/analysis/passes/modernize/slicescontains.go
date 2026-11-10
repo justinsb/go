@@ -405,6 +405,7 @@ func slicescontains(pass *analysis.Pass) (any, error) {
 			if is[*ast.Ident](rng.Key) &&
 				rng.Tok == token.DEFINE &&
 				len(rng.Body.List) == 1 &&
+				!is[*types.ConstType](info.TypeOf(rng.X).Underlying()) && // const []T does not satisfy ~[]E
 				is[*types.Slice](typeparams.CoreType(info.TypeOf(rng.X))) {
 
 				// Have:

@@ -463,8 +463,8 @@ func (tr *traversal) visitType(path []byte, offset uint32, T types.Type) {
 		// so T must belong to another package. No path.
 		return
 
-	case *types.Pointer, *types.Slice, *types.Array, *types.Chan:
-		type hasElem interface{ Elem() types.Type } // note: includes Map
+	case *types.Pointer, *types.Slice, *types.Array, *types.Chan, *types.ConstType:
+		type hasElem interface{ Elem() types.Type } // note: includes Map and ConstType (const T)
 		tr.typ(path, offset, opElem, -1, T.(hasElem).Elem())
 
 	case *types.Map:
@@ -806,7 +806,7 @@ func Object(pkg *types.Package, p Path) (types.Object, error) {
 		t = types.Unalias(t)
 		switch code {
 		case opElem:
-			hasElem, ok := t.(hasElem) // Pointer, Slice, Array, Chan, Map
+			hasElem, ok := t.(hasElem) // Pointer, Slice, Array, Chan, Map, ConstType
 			if !ok {
 				return nil, fmt.Errorf("cannot apply %q to %s (got %T, want pointer, slice, array, chan or map)", code, t, t)
 			}

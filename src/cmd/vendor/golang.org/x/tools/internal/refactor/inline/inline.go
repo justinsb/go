@@ -726,8 +726,16 @@ func (st *state) inlineCall() (*inlineCallResult, error) {
 
 				// simplify decl: func(T...) -> func([]T)
 				lastParamField := last(calleeDecl.Type.Params.List)
-				lastParamField.Type = &ast.ArrayType{
-					Elt: lastParamField.Type.(*ast.Ellipsis).Elt,
+				if c, ok := lastParamField.Type.(*ast.ConstType); ok {
+					// const variadic: func(const ...T) -> func(const []T)
+					lastParamField.Type = &ast.ConstType{
+						Const: c.Const,
+						Elem:  &ast.ArrayType{Elt: c.Elem.(*ast.Ellipsis).Elt},
+					}
+				} else {
+					lastParamField.Type = &ast.ArrayType{
+						Elt: lastParamField.Type.(*ast.Ellipsis).Elt,
+					}
 				}
 
 				if caller.Call.Ellipsis.IsValid() {
@@ -2654,7 +2662,7 @@ func duplicable(info *types.Info, e ast.Expr) bool {
 		// (Non-empty literals are too verbose, and slice/map
 		// literals allocate indirect variables.)
 		if len(e.Elts) == 0 {
-			switch info.TypeOf(e).Underlying().(type) {
+			switch typesinternal.Unconst(info.TypeOf(e)).Underlying().(type) {
 			case *types.Struct, *types.Array:
 				return true
 			}
@@ -2678,7 +2686,7 @@ func duplicable(info *types.Info, e ast.Expr) bool {
 		fun := info.TypeOf(e.Fun)
 		arg := info.TypeOf(e.Args[0])
 
-		switch fun := fun.Underlying().(type) {
+		switch fun := typesinternal.Unconst(fun).Underlying().(type) { // look through const T
 		case *types.Slice:
 			// Do not mark []byte(string) and []rune(string) as duplicable.
 			elem, ok := fun.Elem().Underlying().(*types.Basic)
@@ -3483,6 +3491,9 @@ func (st *state) assignStmts(callerStmt *ast.AssignStmt, returnOperands []ast.Ex
 			if _, ok := texpr.(*ast.StarExpr); ok {
 				// TODO(rfindley): is this necessary? Doesn't the formatter add these parens?
 				texpr = &ast.ParenExpr{X: texpr} // *T -> (*T)   so that (*T)(x) is valid
+			}
+			if _, ok := texpr.(*ast.ConstType); ok {
+				texpr = &ast.ParenExpr{X: texpr} // const T -> (const T)
 			}
 			rhs[i] = &ast.CallExpr{
 				Fun:  texpr,

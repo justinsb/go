@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 	typeindexanalyzer "golang.org/x/tools/internal/analysis/typeindex"
+	"golang.org/x/tools/internal/typesinternal"
 	"golang.org/x/tools/internal/typesinternal/typeindex"
 )
 
@@ -64,7 +65,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 // checkAsTarget reports an error if the second argument to errors.As is invalid.
 func checkAsTarget(info *types.Info, e ast.Expr) error {
-	t := info.Types[e].Type
+	t := typesinternal.Unconst(info.Types[e].Type) // look through const T
 	if types.Identical(t.Underlying(), anyType) {
 		// A target of any is always allowed, since it often indicates
 		// a value forwarded from another source.

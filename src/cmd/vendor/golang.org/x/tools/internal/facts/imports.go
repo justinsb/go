@@ -87,6 +87,8 @@ func importMap(imports []*types.Package) map[string]*types.Package {
 			}
 		case *types.Pointer:
 			addType(T.Elem())
+		case *types.ConstType: // const T
+			addType(T.Elem())
 		case *types.Slice:
 			addType(T.Elem())
 		case *types.Array:

@@ -164,7 +164,12 @@ func formatArgsParams(sig *types.Signature) (format, args *types.Var) {
 	// Check final parameter is "args ...any".
 	// (variadic => slice)
 	args = params.At(nparams - 1)
-	iface, ok := types.Unalias(args.Type().(*types.Slice).Elem()).(*types.Interface)
+	// (The type is const []T for a const variadic parameter, const ...T.)
+	slice, ok := typesinternal.Unconst(args.Type()).(*types.Slice)
+	if !ok {
+		return nil, nil
+	}
+	iface, ok := types.Unalias(slice.Elem()).(*types.Interface)
 	if !ok || !iface.Empty() {
 		return nil, nil
 	}
@@ -676,6 +681,7 @@ func callKind(pass *analysis.Pass, obj types.Object, res *Result) Kind {
 // isFormatter reports whether t could satisfy fmt.Formatter.
 // The only interface method to look for is "Format(State, rune)".
 func isFormatter(typ types.Type) bool {
+	typ = typesinternal.Unconst(typ) // const T holds a T
 	// If the type is an interface, the value it holds might satisfy fmt.Formatter.
 	if _, ok := typ.Underlying().(*types.Interface); ok {
 		// Don't assume type parameters could be formatters. With the greater
@@ -974,7 +980,7 @@ func okPrintfArg(pass *analysis.Pass, fileVersion string, call *ast.CallExpr, rn
 		// to errors.Is using the result of fmt.Errorf may behave unexpectedly.
 		// See golang/go#61342.
 		typ := pass.TypesInfo.Types[arg].Type
-		if t, ok := typ.Underlying().(*types.Pointer); ok && types.Implements(t.Elem(), errorType) && versions.AtLeast(fileVersion, versions.Go1_27) {
+		if t, ok := typesinternal.Unconst(typ).Underlying().(*types.Pointer); ok && types.Implements(t.Elem(), errorType) && versions.AtLeast(fileVersion, versions.Go1_27) {
 			// qual is a qualifier that returns the package name if different from the current package.
 			qual := func(p *types.Package) string {
 				if p == pass.Pkg {
@@ -1143,7 +1149,12 @@ func checkPrint(pass *analysis.Pass, call *ast.CallExpr, name string) {
 		firstArg = params.Len() - 1
 
 		typ := params.At(firstArg).Type()
-		typ = typ.(*types.Slice).Elem()
+		// (The type is const []T for a const variadic parameter, const ...T.)
+		slice, ok := typesinternal.Unconst(typ).(*types.Slice)
+		if !ok {
+			return
+		}
+		typ = slice.Elem()
 		it, ok := types.Unalias(typ).(*types.Interface)
 		if !ok || !it.Empty() {
 			// Skip variadic functions accepting non-interface{} args.
