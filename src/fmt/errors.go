@@ -20,7 +20,7 @@ import (
 // order they appear in the arguments.
 // It is invalid to supply the %w verb with an operand that does not implement
 // the error interface. The %w verb is otherwise a synonym for %v.
-func Errorf(format string, a ...any) (err error) {
+func Errorf(format string, a const ...any) (err error) {
 	// This function has been split in a somewhat unnatural way
 	// so that both it and the errors.New call can be inlined.
 	if err = errorf(format, a...); err != nil {
@@ -32,10 +32,11 @@ func Errorf(format string, a ...any) (err error) {
 }
 
 // errorf formats and returns an error value, or nil if no formatting is required.
-func errorf(format string, a ...any) error {
-	if len(a) == 0 && stringslite.IndexByte(format, '%') == -1 {
+func errorf(format string, ca const ...any) error {
+	if len(ca) == 0 && stringslite.IndexByte(format, '%') == -1 {
 		return nil
 	}
+	a := operands(ca)
 	p := newPrinter()
 	p.wrapErrs = true
 	p.doPrintf(format, a)

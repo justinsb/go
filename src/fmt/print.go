@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // Strings for use with buffer.WriteString.
@@ -209,11 +210,22 @@ func (p *pp) WriteString(s string) (ret int, err error) {
 
 // These routines end in 'f' and take a format string.
 
+// operands returns the const operand list a of a print function as a []any.
+//
+// The print functions accept const operands: they promise not to modify
+// their operands. However, the implementation of formatting is based on
+// reflection and on calling user-defined methods (such as String, Error,
+// and Format), neither of which is expressed in terms of const types.
+// This function is the single place where the const qualifier is removed.
+func operands(a const []any) []any {
+	return *(*[]any)(unsafe.Pointer(&a))
+}
+
 // Fprintf formats according to a format specifier and writes to w.
 // It returns the number of bytes written and any write error encountered.
-func Fprintf(w io.Writer, format string, a ...any) (n int, err error) {
+func Fprintf(w io.Writer, format string, a const ...any) (n int, err error) {
 	p := newPrinter()
-	p.doPrintf(format, a)
+	p.doPrintf(format, operands(a))
 	n, err = w.Write(p.buf)
 	p.free()
 	return
@@ -221,14 +233,14 @@ func Fprintf(w io.Writer, format string, a ...any) (n int, err error) {
 
 // Printf formats according to a format specifier and writes to standard output.
 // It returns the number of bytes written and any write error encountered.
-func Printf(format string, a ...any) (n int, err error) {
+func Printf(format string, a const ...any) (n int, err error) {
 	return Fprintf(os.Stdout, format, a...)
 }
 
 // Sprintf formats according to a format specifier and returns the resulting string.
-func Sprintf(format string, a ...any) string {
+func Sprintf(format string, a const ...any) string {
 	p := newPrinter()
-	p.doPrintf(format, a)
+	p.doPrintf(format, operands(a))
 	s := string(p.buf)
 	p.free()
 	return s
@@ -236,9 +248,9 @@ func Sprintf(format string, a ...any) string {
 
 // Appendf formats according to a format specifier, appends the result to the byte
 // slice, and returns the updated slice.
-func Appendf(b []byte, format string, a ...any) []byte {
+func Appendf(b []byte, format string, a const ...any) []byte {
 	p := newPrinter()
-	p.doPrintf(format, a)
+	p.doPrintf(format, operands(a))
 	b = append(b, p.buf...)
 	p.free()
 	return b
@@ -249,9 +261,9 @@ func Appendf(b []byte, format string, a ...any) []byte {
 // Fprint formats using the default formats for its operands and writes to w.
 // Spaces are added between operands when neither is a string.
 // It returns the number of bytes written and any write error encountered.
-func Fprint(w io.Writer, a ...any) (n int, err error) {
+func Fprint(w io.Writer, a const ...any) (n int, err error) {
 	p := newPrinter()
-	p.doPrint(a)
+	p.doPrint(operands(a))
 	n, err = w.Write(p.buf)
 	p.free()
 	return
@@ -260,15 +272,15 @@ func Fprint(w io.Writer, a ...any) (n int, err error) {
 // Print formats using the default formats for its operands and writes to standard output.
 // Spaces are added between operands when neither is a string.
 // It returns the number of bytes written and any write error encountered.
-func Print(a ...any) (n int, err error) {
+func Print(a const ...any) (n int, err error) {
 	return Fprint(os.Stdout, a...)
 }
 
 // Sprint formats using the default formats for its operands and returns the resulting string.
 // Spaces are added between operands when neither is a string.
-func Sprint(a ...any) string {
+func Sprint(a const ...any) string {
 	p := newPrinter()
-	p.doPrint(a)
+	p.doPrint(operands(a))
 	s := string(p.buf)
 	p.free()
 	return s
@@ -277,9 +289,9 @@ func Sprint(a ...any) string {
 // Append formats using the default formats for its operands, appends the result to
 // the byte slice, and returns the updated slice.
 // Spaces are added between operands when neither is a string.
-func Append(b []byte, a ...any) []byte {
+func Append(b []byte, a const ...any) []byte {
 	p := newPrinter()
-	p.doPrint(a)
+	p.doPrint(operands(a))
 	b = append(b, p.buf...)
 	p.free()
 	return b
@@ -292,9 +304,9 @@ func Append(b []byte, a ...any) []byte {
 // Fprintln formats using the default formats for its operands and writes to w.
 // Spaces are always added between operands and a newline is appended.
 // It returns the number of bytes written and any write error encountered.
-func Fprintln(w io.Writer, a ...any) (n int, err error) {
+func Fprintln(w io.Writer, a const ...any) (n int, err error) {
 	p := newPrinter()
-	p.doPrintln(a)
+	p.doPrintln(operands(a))
 	n, err = w.Write(p.buf)
 	p.free()
 	return
@@ -303,15 +315,15 @@ func Fprintln(w io.Writer, a ...any) (n int, err error) {
 // Println formats using the default formats for its operands and writes to standard output.
 // Spaces are always added between operands and a newline is appended.
 // It returns the number of bytes written and any write error encountered.
-func Println(a ...any) (n int, err error) {
+func Println(a const ...any) (n int, err error) {
 	return Fprintln(os.Stdout, a...)
 }
 
 // Sprintln formats using the default formats for its operands and returns the resulting string.
 // Spaces are always added between operands and a newline is appended.
-func Sprintln(a ...any) string {
+func Sprintln(a const ...any) string {
 	p := newPrinter()
-	p.doPrintln(a)
+	p.doPrintln(operands(a))
 	s := string(p.buf)
 	p.free()
 	return s
@@ -320,9 +332,9 @@ func Sprintln(a ...any) string {
 // Appendln formats using the default formats for its operands, appends the result
 // to the byte slice, and returns the updated slice. Spaces are always added
 // between operands and a newline is appended.
-func Appendln(b []byte, a ...any) []byte {
+func Appendln(b []byte, a const ...any) []byte {
 	p := newPrinter()
-	p.doPrintln(a)
+	p.doPrintln(operands(a))
 	b = append(b, p.buf...)
 	p.free()
 	return b

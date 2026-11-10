@@ -239,6 +239,9 @@ func (w *typeWriter) typ(typ Type) {
 					w.byte(';')
 				}
 				first = false
+				if m.typ.(*Signature).constRcv {
+					w.string("const ")
+				}
 				w.string(m.name)
 				w.signature(m.typ.(*Signature))
 			}
@@ -363,6 +366,9 @@ func (w *typeWriter) typeSet(s *_TypeSet) {
 			w.byte(';')
 		}
 		first = false
+		if m.typ.(*Signature).constRcv {
+			w.string("const ")
+		}
 		w.string(m.name)
 		w.signature(m.typ.(*Signature))
 	}

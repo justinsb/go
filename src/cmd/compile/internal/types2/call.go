@@ -872,7 +872,7 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 		check.recordSelection(e, FieldVal, x.typ(), obj, index, indirect)
 		// A field selected through a const (or otherwise read-only)
 		// operand is read-only and has a const view of the field type.
-		ro := x.readonly()
+		ro := x.readonlyDeref()
 		if x.addressable() || indirect {
 			x.mode_ = variable
 			if ro {
@@ -892,7 +892,7 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 		// TODO(mark): Assert that sig.rparams is nil here?
 
 		// Only const methods may be selected through a const (or otherwise read-only) operand.
-		if (x.mode() == typexpr && isConst(x.typ()) || x.mode() != typexpr && x.readonly()) && !obj.isConstCallable() {
+		if (x.mode() == typexpr && isConst(x.typ()) || x.mode() != typexpr && x.readonlyDeref()) && !obj.isConstCallable() {
 			check.errorf(e.Sel, InvalidMethodExpr, "cannot call non-const method %s on const value %s", sel, x.expr)
 			goto Error
 		}

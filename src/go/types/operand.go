@@ -86,6 +86,13 @@ func (x *operand) readonly() bool {
 	return x.mode_ == rovariable || isConst(x.typ_)
 }
 
+// readonlyDeref is like readonly but it also reports true if x is a
+// pointer to a const value (*const T). It must be used for operations
+// that may implicitly dereference x.
+func (x *operand) readonlyDeref() bool {
+	return x.readonly() || isPtrToConst(x.typ_)
+}
+
 // varMode returns the operand mode for an addressable location
 // derived from x (such as a field or element of x): the result
 // is rovariable if x is read-only, and variable otherwise.

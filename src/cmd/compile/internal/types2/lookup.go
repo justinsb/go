@@ -671,7 +671,7 @@ func deref(typ Type) (Type, bool) {
 			}
 			return Typ[Invalid], true
 		}
-		return p.base, true
+		return unconst(p.base), true
 	}
 	return typ, false
 }
@@ -681,8 +681,8 @@ func deref(typ Type) (Type, bool) {
 func derefStructPtr(typ Type) Type {
 	typ = unconst(typ)
 	if p, _ := typ.Underlying().(*Pointer); p != nil {
-		if _, ok := p.base.Underlying().(*Struct); ok {
-			return p.base
+		if _, ok := unconst(p.base).Underlying().(*Struct); ok {
+			return unconst(p.base)
 		}
 	}
 	return typ

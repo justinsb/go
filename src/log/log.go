@@ -255,7 +255,7 @@ func init() {
 
 // Print calls l.Output to print to the logger.
 // Arguments are handled in the manner of [fmt.Print].
-func (l *Logger) Print(v ...any) {
+func (l *Logger) Print(v const ...any) {
 	l.output(0, 2, func(b []byte) []byte {
 		return fmt.Append(b, v...)
 	})
@@ -263,7 +263,7 @@ func (l *Logger) Print(v ...any) {
 
 // Printf calls l.Output to print to the logger.
 // Arguments are handled in the manner of [fmt.Printf].
-func (l *Logger) Printf(format string, v ...any) {
+func (l *Logger) Printf(format string, v const ...any) {
 	l.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendf(b, format, v...)
 	})
@@ -271,14 +271,14 @@ func (l *Logger) Printf(format string, v ...any) {
 
 // Println calls l.Output to print to the logger.
 // Arguments are handled in the manner of [fmt.Println].
-func (l *Logger) Println(v ...any) {
+func (l *Logger) Println(v const ...any) {
 	l.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendln(b, v...)
 	})
 }
 
 // Fatal is equivalent to l.Print() followed by a call to [os.Exit](1).
-func (l *Logger) Fatal(v ...any) {
+func (l *Logger) Fatal(v const ...any) {
 	l.output(0, 2, func(b []byte) []byte {
 		return fmt.Append(b, v...)
 	})
@@ -286,7 +286,7 @@ func (l *Logger) Fatal(v ...any) {
 }
 
 // Fatalf is equivalent to l.Printf() followed by a call to [os.Exit](1).
-func (l *Logger) Fatalf(format string, v ...any) {
+func (l *Logger) Fatalf(format string, v const ...any) {
 	l.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendf(b, format, v...)
 	})
@@ -294,7 +294,7 @@ func (l *Logger) Fatalf(format string, v ...any) {
 }
 
 // Fatalln is equivalent to l.Println() followed by a call to [os.Exit](1).
-func (l *Logger) Fatalln(v ...any) {
+func (l *Logger) Fatalln(v const ...any) {
 	l.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendln(b, v...)
 	})
@@ -302,7 +302,7 @@ func (l *Logger) Fatalln(v ...any) {
 }
 
 // Panic is equivalent to l.Print() followed by a call to panic().
-func (l *Logger) Panic(v ...any) {
+func (l *Logger) Panic(v const ...any) {
 	s := fmt.Sprint(v...)
 	l.output(0, 2, func(b []byte) []byte {
 		return append(b, s...)
@@ -311,7 +311,7 @@ func (l *Logger) Panic(v ...any) {
 }
 
 // Panicf is equivalent to l.Printf() followed by a call to panic().
-func (l *Logger) Panicf(format string, v ...any) {
+func (l *Logger) Panicf(format string, v const ...any) {
 	s := fmt.Sprintf(format, v...)
 	l.output(0, 2, func(b []byte) []byte {
 		return append(b, s...)
@@ -320,7 +320,7 @@ func (l *Logger) Panicf(format string, v ...any) {
 }
 
 // Panicln is equivalent to l.Println() followed by a call to panic().
-func (l *Logger) Panicln(v ...any) {
+func (l *Logger) Panicln(v const ...any) {
 	s := fmt.Sprintln(v...)
 	l.output(0, 2, func(b []byte) []byte {
 		return append(b, s...)
@@ -396,7 +396,7 @@ func Writer() io.Writer {
 
 // Print calls Output to print to the standard logger.
 // Arguments are handled in the manner of [fmt.Print].
-func Print(v ...any) {
+func Print(v const ...any) {
 	std.output(0, 2, func(b []byte) []byte {
 		return fmt.Append(b, v...)
 	})
@@ -404,7 +404,7 @@ func Print(v ...any) {
 
 // Printf calls Output to print to the standard logger.
 // Arguments are handled in the manner of [fmt.Printf].
-func Printf(format string, v ...any) {
+func Printf(format string, v const ...any) {
 	std.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendf(b, format, v...)
 	})
@@ -412,14 +412,14 @@ func Printf(format string, v ...any) {
 
 // Println calls Output to print to the standard logger.
 // Arguments are handled in the manner of [fmt.Println].
-func Println(v ...any) {
+func Println(v const ...any) {
 	std.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendln(b, v...)
 	})
 }
 
 // Fatal is equivalent to [Print] followed by a call to [os.Exit](1).
-func Fatal(v ...any) {
+func Fatal(v const ...any) {
 	std.output(0, 2, func(b []byte) []byte {
 		return fmt.Append(b, v...)
 	})
@@ -427,7 +427,7 @@ func Fatal(v ...any) {
 }
 
 // Fatalf is equivalent to [Printf] followed by a call to [os.Exit](1).
-func Fatalf(format string, v ...any) {
+func Fatalf(format string, v const ...any) {
 	std.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendf(b, format, v...)
 	})
@@ -435,7 +435,7 @@ func Fatalf(format string, v ...any) {
 }
 
 // Fatalln is equivalent to [Println] followed by a call to [os.Exit](1).
-func Fatalln(v ...any) {
+func Fatalln(v const ...any) {
 	std.output(0, 2, func(b []byte) []byte {
 		return fmt.Appendln(b, v...)
 	})
@@ -443,7 +443,7 @@ func Fatalln(v ...any) {
 }
 
 // Panic is equivalent to [Print] followed by a call to panic().
-func Panic(v ...any) {
+func Panic(v const ...any) {
 	s := fmt.Sprint(v...)
 	std.output(0, 2, func(b []byte) []byte {
 		return append(b, s...)
@@ -452,7 +452,7 @@ func Panic(v ...any) {
 }
 
 // Panicf is equivalent to [Printf] followed by a call to panic().
-func Panicf(format string, v ...any) {
+func Panicf(format string, v const ...any) {
 	s := fmt.Sprintf(format, v...)
 	std.output(0, 2, func(b []byte) []byte {
 		return append(b, s...)
@@ -461,7 +461,7 @@ func Panicf(format string, v ...any) {
 }
 
 // Panicln is equivalent to [Println] followed by a call to panic().
-func Panicln(v ...any) {
+func Panicln(v const ...any) {
 	s := fmt.Sprintln(v...)
 	std.output(0, 2, func(b []byte) []byte {
 		return append(b, s...)

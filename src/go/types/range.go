@@ -40,7 +40,7 @@ func (check *Checker) rangeStmt(inner stmtContext, rangeStmt *ast.RangeStmt, noN
 	// Ranging over a const (or otherwise read-only) array, slice, or map
 	// yields const views of the keys and elements.
 	ro := false
-	if x.isValid() && x.readonly() {
+	if x.isValid() && x.readonlyDeref() {
 		x.typ_ = unconst(x.typ())
 		if u, _ := commonUnder(x.typ(), nil); u != nil {
 			switch arrayPtrDeref(u).(type) {

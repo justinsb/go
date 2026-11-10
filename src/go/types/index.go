@@ -50,21 +50,23 @@ func (check *Checker) indexExpr(x *operand, e *indexedExpr) (isFuncInst bool) {
 
 	// Indexing a const (or otherwise read-only) operand yields a read-only
 	// element with a const view of the element type.
-	if x.readonly() {
+	// (ro is also set below when indexing through a pointer to a const array.)
+	ro := x.readonly()
+	if ro {
 		x.typ_ = unconst(x.typ())
-		defer func() {
-			if isFuncInst || !x.isValid() {
-				return
-			}
-			switch x.mode() {
-			case variable:
-				x.mode_ = rovariable
-			case mapindex:
-				x.mode_ = commaok // not assignable
-			}
-			x.typ_ = constView(x.typ())
-		}()
 	}
+	defer func() {
+		if !ro || isFuncInst || !x.isValid() {
+			return
+		}
+		switch x.mode() {
+		case variable:
+			x.mode_ = rovariable
+		case mapindex:
+			x.mode_ = commaok // not assignable
+		}
+		x.typ_ = constView(x.typ())
+	}()
 
 	// We cannot index on an incomplete type; make sure it's complete.
 	if !check.isComplete(x.typ()) {
@@ -114,7 +116,8 @@ func (check *Checker) indexExpr(x *operand, e *indexedExpr) (isFuncInst bool) {
 		x.typ_ = typ.elem
 
 	case *Pointer:
-		if typ, _ := typ.base.Underlying().(*Array); typ != nil {
+		ro = ro || isConst(typ.base)
+		if typ, _ := unconst(typ.base).Underlying().(*Array); typ != nil {
 			valid = true
 			length = typ.len
 			x.mode_ = variable
@@ -165,7 +168,8 @@ func (check *Checker) indexExpr(x *operand, e *indexedExpr) (isFuncInst bool) {
 					mode = value
 				}
 			case *Pointer:
-				if t, _ := t.base.Underlying().(*Array); t != nil {
+				ro = ro || isConst(t.base)
+				if t, _ := unconst(t.base).Underlying().(*Array); t != nil {
 					l = t.len
 					e = t.elem
 				}
@@ -256,14 +260,16 @@ func (check *Checker) sliceExpr(x *operand, e *ast.SliceExpr) {
 	}
 
 	// Slicing a const (or otherwise read-only) operand yields a const slice.
-	if x.readonly() {
+	// (ro is also set below when slicing through a pointer to a const array.)
+	ro := x.readonly()
+	if ro {
 		x.typ_ = unconst(x.typ())
-		defer func() {
-			if x.isValid() {
-				x.typ_ = constView(x.typ())
-			}
-		}()
 	}
+	defer func() {
+		if ro && x.isValid() {
+			x.typ_ = constView(x.typ())
+		}
+	}()
 
 	// determine common underlying type cu
 	var ct, cu Type // type and respective common underlying type
@@ -355,7 +361,8 @@ func (check *Checker) sliceExpr(x *operand, e *ast.SliceExpr) {
 		x.typ_ = &Slice{elem: u.elem}
 
 	case *Pointer:
-		if u, _ := u.base.Underlying().(*Array); u != nil {
+		ro = ro || isConst(u.base)
+		if u, _ := unconst(u.base).Underlying().(*Array); u != nil {
 			valid = true
 			length = u.len
 			x.typ_ = &Slice{elem: u.elem}

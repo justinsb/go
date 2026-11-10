@@ -185,3 +185,15 @@ func constCompatible(f, g *Signature) bool {
 	}
 	return true
 }
+
+// isPtrToConst reports whether t is a (non-const) pointer type with a
+// const base type (*const T). Operations that implicitly dereference
+// such a pointer (field selection, array indexing and slicing, range)
+// access a const value and thus yield read-only results.
+func isPtrToConst(t Type) bool {
+	if t == nil {
+		return false
+	}
+	p, _ := t.Underlying().(*Pointer)
+	return p != nil && p.base != nil && isConst(p.base)
+}

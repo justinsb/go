@@ -1219,7 +1219,7 @@ func makeSig(res Type, args ...Type) *Signature {
 // otherwise it returns typ.
 func arrayPtrDeref(typ Type) Type {
 	if p, ok := Unalias(typ).(*Pointer); ok {
-		if a, _ := p.base.Underlying().(*Array); a != nil {
+		if a, _ := unconst(p.base).Underlying().(*Array); a != nil {
 			return a
 		}
 	}

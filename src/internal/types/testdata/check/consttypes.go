@@ -373,3 +373,79 @@ func (impl3) M(p const *T) const []int { return nil }
 var _ RI2 = impl3 /* ERROR "wrong type for method" */{}
 
 func dots(a const ... /* ERROR "can only use ... with final parameter" */int, b int) {}
+
+// --- pointers to const, embedding, generics, results ---
+
+type E struct {
+	*T
+	in Inner
+}
+
+func more(t const *T, mt *T, e const *E, ce const E) {
+	var cv const T
+	p := &cv
+	_ = p.n
+	*p = *t
+	cv = *t
+	var pa *const [2]*T
+	_ = len(pa)
+	for _, x := range pa {
+		_ = x.N()
+	}
+	var _ const *T = pa[0]
+	var _ const []*T = pa[:]
+	_ = e.n + e.T.n + e.in.a + e.N() + ce.N()
+	var ch chan const *T
+	ch <- t
+	_ = []const *T{t, mt}
+	_ = map[string]const *T{"a": t}
+	var x const int = 5
+	x++
+	var s const string = "a"
+	s += "b"
+	defer t.N()
+	go t.N()
+	var ci const any = t
+	var i2 any = mt
+	_ = ci == i2
+	_ = ci != nil
+}
+
+func morebad(t const *T, mt *T, e const *E, ce const E) {
+	var cv const T
+	p := &cv
+	p /* ERROR "read-only" */.n = 1
+	p.SetN /* ERROR "non-const method" */(1)
+	p /* ERROR "read-only" */.s[0] = 1
+	*mt = * /* ERROR "read-only" */t
+	*mt = cv /* ERROR "discards const" */
+	var pa *const [2]*T
+	pa /* ERROR "read-only" */[0] = nil
+	pa /* ERROR "read-only" */[0].n = 1
+	for _, x := range pa {
+		x /* ERROR "read-only" */.n = 1
+	}
+	var _ []*T = pa /* ERROR "discards const" */[:]
+	e /* ERROR "read-only" */.n = 1
+	e /* ERROR "read-only" */.T.n = 1
+	e.SetN /* ERROR "non-const method" */(1)
+	e.in.Set /* ERROR "non-const method" */(1)
+	ce /* ERROR "read-only" */.T.n = 1
+	var ch chan *T
+	ch <- t /* ERROR "discards const" */
+	_ = []*T{t /* ERROR "discards const" */}
+	defer t.SetN /* ERROR "non-const method" */(1)
+	go t.SetN /* ERROR "non-const method" */(1)
+	* /* ERROR "read-only" */t = T{}
+	cv /* ERROR "read-only" */.n = 1
+}
+
+func gen[S ~[]E, E any, P any](s const S, x const P) {
+	s /* ERROR "read-only" */[0] = *new(E)
+	var _ P = x /* ERROR "discards const" */
+	var _ S = s /* ERROR "discards const" */
+	_ = append(s /* ERROR "cannot append to const" */, *new(E))
+}
+
+func ret(t const *T) *T { return t /* ERROR "discards const" */ }
+func ret2(t const *T) (*T, int) { return t /* ERROR "discards const" */, 1 }
