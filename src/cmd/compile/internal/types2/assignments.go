@@ -335,7 +335,7 @@ func (check *Checker) typesSummary(list []Type, variadic, hasDots bool) string {
 			switch {
 			case variadic:
 				// In correct code, the parameter type is a slice, but be careful.
-				if t, _ := t.(*Slice); t != nil {
+				if t, _ := unconst(t).(*Slice); t != nil {
 					s = check.sprintf("%s", t.elem)
 				}
 				s = "..." + s

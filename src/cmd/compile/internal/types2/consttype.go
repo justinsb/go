@@ -139,3 +139,49 @@ func identicalIgnoreConst(x, y Type) bool {
 	c.ignoreConst = true
 	return c.identical(x, y, nil)
 }
+
+// addsConst reports whether T is identical to V, or a const version of V.
+// If so, a value of type V can be used as a value of type T without any
+// change in representation and without discarding a const qualifier.
+func addsConst(V, T Type) bool {
+	if Identical(V, T) {
+		return true
+	}
+	if c := asConst(T); c != nil {
+		return identicalIgnoreConst(V, c.elem)
+	}
+	if c := asConst(V); c != nil && isValueType(c.elem) {
+		return Identical(c.elem, T)
+	}
+	return false
+}
+
+// constCompatible reports whether a function with signature f can be
+// used in place of a function with signature g because f and g differ
+// only in const qualifiers such that f promises at least as much as g
+// requires: each parameter type of f is identical to, or a const version
+// of the corresponding parameter type of g (f doesn't modify what g may
+// modify), and each result type of g is identical to, or a const version
+// of the corresponding result type of f. Receivers are ignored.
+func constCompatible(f, g *Signature) bool {
+	if f == nil || g == nil {
+		return false
+	}
+	if f.TypeParams().Len() != 0 || g.TypeParams().Len() != 0 {
+		return false
+	}
+	if f.variadic != g.variadic || f.params.Len() != g.params.Len() || f.results.Len() != g.results.Len() {
+		return false
+	}
+	for i := 0; i < f.params.Len(); i++ {
+		if !addsConst(g.params.At(i).typ, f.params.At(i).typ) {
+			return false
+		}
+	}
+	for i := 0; i < f.results.Len(); i++ {
+		if !addsConst(f.results.At(i).typ, g.results.At(i).typ) {
+			return false
+		}
+	}
+	return true
+}

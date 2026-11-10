@@ -403,6 +403,19 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 	constV := isConst(V)
 	V = unconst(V)
 
+	// sameSig reports whether method f (of V) has a signature suitable
+	// for implementing method m (of T): the signatures must be equivalent,
+	// or f's signature must be usable in place of m's signature because
+	// they differ only in const qualifiers (see constCompatible).
+	sameSig := func(f, m *Func) bool {
+		if equivalent(f.typ, m.typ) {
+			return true
+		}
+		fs, _ := f.typ.(*Signature)
+		ms, _ := m.typ.(*Signature)
+		return constCompatible(fs, ms) || !static && constCompatible(ms, fs)
+	}
+
 	state := ok
 	var m *Func // method on T we're trying to implement
 	var f *Func // method on V, if found (state is one of ok, wrongName, wrongSig)
@@ -420,7 +433,7 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 				break
 			}
 
-			if !equivalent(f.typ, m.typ) {
+			if !sameSig(f, m) {
 				state = wrongSig
 				break
 			}
@@ -474,7 +487,7 @@ func (check *Checker) missingMethod(V, T Type, static bool, equivalent func(x, y
 				break
 			}
 
-			if !equivalent(f.typ, m.typ) {
+			if !sameSig(f, m) {
 				state = wrongSig
 				break
 			}

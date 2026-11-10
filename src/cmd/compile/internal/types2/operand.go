@@ -443,6 +443,15 @@ func (x *operand) assignableTo(check *Checker, T Type, cause *string) (bool, Cod
 		return true, 0
 	}
 
+	// V and T are function types that differ only in const qualifiers
+	// such that a function of type V can be used as a function of type T,
+	// and at least one of V or T is not a named type.
+	if Vs, _ := Vu.(*Signature); Vs != nil && Vp == nil && Tp == nil {
+		if Ts, _ := Tu.(*Signature); Ts != nil && (!hasName(V) || !hasName(T)) && constCompatible(Vs, Ts) {
+			return true, 0
+		}
+	}
+
 	// T is an interface type, but not a type parameter, and V implements T.
 	// Also handle the case where T is a pointer to an interface so that we get
 	// the Checker.implements error cause.

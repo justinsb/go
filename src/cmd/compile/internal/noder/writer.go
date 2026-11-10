@@ -2258,7 +2258,7 @@ func (w *writer) expr(expr syntax.Expr) {
 
 		paramType := func(i int) types2.Type {
 			if sigType.Variadic() && !expr.HasDots && i >= paramTypes.Len()-1 {
-				return paramTypes.At(paramTypes.Len() - 1).Type().(*types2.Slice).Elem()
+				return unconst(paramTypes.At(paramTypes.Len() - 1).Type()).(*types2.Slice).Elem()
 			}
 			return paramTypes.At(i).Type()
 		}

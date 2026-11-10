@@ -506,7 +506,12 @@ func (check *Checker) arguments(call *syntax.CallExpr, sig *Signature, targs []T
 				vars := make([]*Var, npars-1) // npars > 0 for variadic functions
 				copy(vars, sig.params.vars)
 				last := sig.params.vars[npars-1]
-				typ := last.typ.(*Slice).elem
+				// For a const variadic parameter (const ...T) the parameter
+				// type is const []T and the arguments must be assignable to const T.
+				typ := unconst(last.typ).(*Slice).elem
+				if isConst(last.typ) {
+					typ = NewConstType(typ)
+				}
 				for len(vars) < nargs {
 					vars = append(vars, NewParam(last.pos, last.pkg, last.name, typ))
 				}
@@ -922,7 +927,12 @@ func (check *Checker) selector(x *operand, e *syntax.SelectorExpr, wantType bool
 					name = "_"
 				}
 			}
-			params = append([]*Var{NewParam(sig.recv.pos, sig.recv.pkg, name, x.typ())}, params...)
+			// For a const method, the receiver argument may be a const value.
+			recvTyp := x.typ()
+			if obj.isConstMethod() {
+				recvTyp = NewConstType(recvTyp)
+			}
+			params = append([]*Var{NewParam(sig.recv.pos, sig.recv.pkg, name, recvTyp)}, params...)
 			x.mode_ = value
 			x.typ_ = &Signature{
 				tparams:  sig.tparams,

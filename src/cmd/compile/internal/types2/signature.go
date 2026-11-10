@@ -67,7 +67,7 @@ func NewSignatureType(recv *Var, recvTypeParams, typeParams []*TypeParam, params
 		if n == 0 {
 			panic("variadic function must have at least one parameter")
 		}
-		last := params.At(n - 1).typ
+		last := unconst(params.At(n - 1).typ) // may be const []T for const ...T
 		var S *Slice
 		for t := range typeset(last) {
 			if t == nil {
@@ -408,11 +408,19 @@ func (check *Checker) collectParams(kind VarKind, list []*syntax.Field) (names [
 
 	var typ Type
 	var prev syntax.Expr
+	constDots := false // if set, the variadic parameter is of the form const ...T
 	for i, field := range list {
 		ftype := field.Type
 		// type-check type of grouped fields only once
 		if ftype != prev {
 			prev = ftype
+			if c, _ := ftype.(*syntax.ConstType); c != nil {
+				if t, _ := c.Elem.(*syntax.DotsType); t != nil {
+					// const ...T
+					ftype = t
+					constDots = kind == ParamVar && i == len(list)-1
+				}
+			}
 			if t, _ := ftype.(*syntax.DotsType); t != nil {
 				ftype = t.Elem
 				if kind == ParamVar && i == len(list)-1 {
@@ -459,6 +467,10 @@ func (check *Checker) collectParams(kind VarKind, list []*syntax.Field) (names [
 	if variadic {
 		last := params[len(params)-1]
 		last.typ = &Slice{elem: last.typ}
+		if constDots {
+			// For a const variadic parameter const ...T, the parameter type is const []T.
+			last.typ = constOf(last.typ)
+		}
 		check.recordTypeAndValue(list[len(list)-1].Type, typexpr, last.typ, nil)
 	}
 

@@ -179,8 +179,13 @@ func (check *Checker) builtin(x *operand, call *syntax.CallExpr, id builtinId) (
 		// general case
 		if sig == nil {
 			if constSrc {
-				if srcE, _ := sliceElem(args[1]); srcE != nil && !constElemOk(E, srcE) {
-					return
+				// The elements of the const source slice must be assignable
+				// to elements of the destination; if so, the argument is ok.
+				if srcE, _ := sliceElem(args[1]); srcE != nil && identicalIgnoreConst(E, srcE) {
+					if !constElemOk(E, srcE) {
+						return
+					}
+					args[1].typ_ = NewSlice(E)
 				}
 			}
 			// check arguments by creating custom signature

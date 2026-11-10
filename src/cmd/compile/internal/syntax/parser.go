@@ -1928,7 +1928,7 @@ func (p *parser) embeddedTerm() Expr {
 	return t
 }
 
-// ParameterDecl = [ IdentifierList ] [ "..." ] Type .
+// ParameterDecl = [ IdentifierList ] [ [ "const" ] "..." ] Type .
 func (p *parser) paramDeclOrNil(name *Name, follow token) *Field {
 	if trace {
 		defer p.trace("paramDeclOrNil")()
@@ -1989,6 +1989,30 @@ func (p *parser) paramDeclOrNil(name *Name, follow token) *Field {
 		}
 
 		f.Name = name
+	}
+
+	if p.tok == _Const {
+		// [name] "const" "..." Type
+		// [name] "const" Type
+		t := new(ConstType)
+		t.pos = p.pos()
+		p.next()
+		if p.tok == _DotDotDot {
+			d := new(DotsType)
+			d.pos = p.pos()
+			p.next()
+			d.Elem = p.typeOrNil()
+			if d.Elem == nil {
+				f.Type = p.badExpr()
+				p.syntaxError("... is missing type")
+				return f
+			}
+			t.Elem = d
+		} else {
+			t.Elem = p.type_()
+		}
+		f.Type = t
+		return f
 	}
 
 	if p.tok == _DotDotDot {
@@ -2149,7 +2173,12 @@ func (p *parser) paramList(name *Name, typ Expr, close token, requireNames, dddo
 	// check use of ...
 	first := true // only report first occurrence
 	for i, f := range list {
-		if t, _ := f.Type.(*DotsType); t != nil && (!dddok || i+1 < len(list)) {
+		t, _ := f.Type.(*DotsType)
+		c, _ := f.Type.(*ConstType)
+		if c != nil {
+			t, _ = c.Elem.(*DotsType) // const ...T
+		}
+		if t != nil && (!dddok || i+1 < len(list)) {
 			if first {
 				first = false
 				if dddok {
@@ -2159,7 +2188,11 @@ func (p *parser) paramList(name *Name, typ Expr, close token, requireNames, dddo
 				}
 			}
 			// use T instead of invalid ...T
-			f.Type = t.Elem
+			if c != nil {
+				c.Elem = t.Elem
+			} else {
+				f.Type = t.Elem
+			}
 		}
 	}
 

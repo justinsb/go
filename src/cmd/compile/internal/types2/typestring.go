@@ -449,6 +449,13 @@ func (w *typeWriter) tuple(tup *Tuple, variadic bool) {
 			}
 			typ := v.typ
 			if variadic && i == len(tup.vars)-1 {
+				if c, ok := typ.(*ConstType); ok {
+					if _, ok := c.elem.(*Slice); ok {
+						// const variadic parameter
+						w.string("const ")
+						typ = c.elem
+					}
+				}
 				if slice, ok := typ.(*Slice); ok {
 					w.string("...")
 					w.typ(slice.elem)
