@@ -2240,6 +2240,15 @@ func profilealloc(mp *m, x unsafe.Pointer, size uintptr) {
 	}
 	c.memProfRate = MemProfileRate
 	c.nextSample = nextSample()
+	if c.memProfRate == 0 {
+		// We may be here only because the rate changed. If memory
+		// profiling is now off, as it is once schedinit finds that
+		// the linker set disableMemoryProfiling, there is nothing
+		// to sample. Recording a sample anyway would cost the
+		// first allocation after the change a stack unwind and,
+		// if it is the first sample, the profiler's hash table.
+		return
+	}
 	mProf_Malloc(mp, x, size)
 }
 
