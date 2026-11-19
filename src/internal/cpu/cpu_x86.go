@@ -199,10 +199,7 @@ func doinit() {
 
 	X86.HasFSRM = isSet(edx7, cpuid_FSRM)
 
-	var maxExtendedInformation uint32
-	maxExtendedInformation, _, _, _ = cpuid(0x80000000, 0)
-
-	if maxExtendedInformation < 0x80000001 {
+	if maxExtendedFunctionInformation < 0x80000001 {
 		osInit()
 		return
 	}
