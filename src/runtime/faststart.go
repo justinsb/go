@@ -37,11 +37,19 @@ import (
 //
 //   - The cgroup CPU limit is not consulted when choosing the initial
 //     GOMAXPROCS, and the goroutine that keeps GOMAXPROCS up to date is
-//     not started. Unless the GOMAXPROCS environment variable is set,
-//     GOMAXPROCS starts out as the number of CPUs in the affinity mask,
-//     as with GODEBUG=containermaxprocs=0, and only takes the cgroup
-//     CPU limit into account when the first GC cycle is about to start.
-//     A program that wants that sooner can call [SetDefaultGOMAXPROCS].
+//     not started.
+//
+//   - At most faststartInitialProcs Ps are created, however many CPUs
+//     the machine has. Each P is a sizable heap allocation that has to
+//     be initialized, so on a large machine creating them all dominates
+//     the cost of starting up.
+//
+// The last two mean that, unless the GOMAXPROCS environment variable is
+// set, GOMAXPROCS starts out as the smaller of faststartInitialProcs and
+// the number of CPUs in the affinity mask, and only takes on its usual
+// default value, including any cgroup CPU limit, when the first GC cycle
+// is about to start. A program that wants the usual default sooner can
+// call [SetDefaultGOMAXPROCS].
 //
 // Starting those goroutines eagerly is expensive mostly because each one
 // wakes an idle P, which creates an OS thread. With them deferred, a
@@ -50,6 +58,10 @@ import (
 //
 // Fast start mode also changes the heap so that fewer pages are touched
 // for the first time during startup. See faststartSizeClass.
+
+// faststartInitialProcs is the largest default value of GOMAXPROCS that
+// fast start mode uses before faststartDeferred has run.
+const faststartInitialProcs = 4
 
 // faststartState holds the state of the work that fast start mode
 // defers.
@@ -137,9 +149,8 @@ func faststartCgroupProbe() {
 }
 
 // faststartDefaultGOMAXPROCS sets GOMAXPROCS to its usual default value,
-// which schedinit did not do in fast start mode because it did not
-// consult the cgroup CPU limit, unless the program has chosen a value of
-// its own in the meantime.
+// which schedinit did not do in fast start mode, unless the program has
+// chosen a value of its own in the meantime.
 //
 // It stops the world, so the caller must be able to block and must not
 // hold gcsema or worldsema.

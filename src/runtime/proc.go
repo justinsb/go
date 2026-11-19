@@ -953,6 +953,12 @@ func schedinit() {
 		//    runtime.GOMAXPROCS(0) always equals runtime.NumCPU (which is
 		//    just numCPUStartup).
 		procs = defaultGOMAXPROCS(numCPUStartup)
+		if faststart {
+			// Don't pay for Ps that a short-lived program
+			// will never use. faststartDeferred creates
+			// the rest.
+			procs = min(procs, faststartInitialProcs)
+		}
 	}
 	if procresize(procs) != nil {
 		throw("unknown runnable goroutine during bootstrap")

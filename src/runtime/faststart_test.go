@@ -81,3 +81,17 @@ func TestFaststartDeferred(t *testing.T) {
 		})
 	}
 }
+
+// TestFaststartGOMAXPROCS checks that a program built in fast start mode
+// starts with a bounded number of Ps, and moves to the default GOMAXPROCS
+// once it runs a GC cycle.
+func TestFaststartGOMAXPROCS(t *testing.T) {
+	exe, err := buildTestProg(t, "testprog", "-tags=faststart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := runBuiltTestProg(t, exe, "FaststartGOMAXPROCS")
+	if want := "OK\n"; got != want {
+		t.Errorf("got:\n%swant:\n%s", got, want)
+	}
+}
