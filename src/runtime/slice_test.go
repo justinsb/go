@@ -522,6 +522,9 @@ func TestAppendByteInLoop(t *testing.T) {
 	if asan.Enabled || msan.Enabled {
 		t.Skip("skipping in sanitizer mode")
 	}
+	if runtime.Faststart {
+		t.Skip("skipping in fast start mode: test expects capacities for the standard size classes")
+	}
 	for _, test := range [][3]int{
 		{0, 0, 0},
 		{1, 1, 8},
@@ -582,6 +585,9 @@ func TestAppendPtrInLoop(t *testing.T) {
 	}
 	if asan.Enabled || msan.Enabled {
 		t.Skip("skipping in sanitizer mode")
+	}
+	if runtime.Faststart {
+		t.Skip("skipping in fast start mode: test expects capacities for the standard size classes")
 	}
 	var tests [][3]int
 	if runtime.PtrSize == 8 {
@@ -651,6 +657,9 @@ func TestAppendByteCapInLoop(t *testing.T) {
 	}
 	if asan.Enabled || msan.Enabled {
 		t.Skip("skipping in sanitizer mode")
+	}
+	if runtime.Faststart {
+		t.Skip("skipping in fast start mode: test expects capacities for the standard size classes")
 	}
 	for _, test := range [][3]int{
 		{0, 0, 0},

@@ -169,6 +169,9 @@ func TestEmptySlice(t *testing.T) {
 	if asan.Enabled {
 		t.Skip("skipping with -asan: test assumes exact size class alignment, but asan redzone breaks that assumption")
 	}
+	if runtime.Faststart {
+		t.Skip("skipping in fast start mode: test assumes exact size class alignment, but fast start mode rounds objsize up to a larger size class")
+	}
 	x, y := adjChunks()
 
 	// the pointer inside xs points to y.
@@ -200,6 +203,9 @@ func adjStringChunk() (string, *objtype) {
 func TestEmptyString(t *testing.T) {
 	if asan.Enabled {
 		t.Skip("skipping with -asan: test assumes exact size class alignment, but asan redzone breaks that assumption")
+	}
+	if runtime.Faststart {
+		t.Skip("skipping in fast start mode: test assumes exact size class alignment, but fast start mode rounds objsize up to a larger size class")
 	}
 	x, y := adjStringChunk()
 

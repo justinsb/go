@@ -215,7 +215,9 @@ func main() {
 	}()
 
 	gcenable()
-	defaultGOMAXPROCSUpdateEnable() // don't STW before runtime initialized.
+	if !faststart {
+		defaultGOMAXPROCSUpdateEnable() // don't STW before runtime initialized.
+	}
 
 	// If we encountered a removed GODEBUG during startup we can panic now.
 	if k := invalidGODEBUG.key; k != "" {
@@ -372,6 +374,10 @@ func runExitHooks(code int) {
 
 // start forcegc helper goroutine
 func init() {
+	if faststart {
+		// Started by faststartDeferred.
+		return
+	}
 	go forcegchelper()
 }
 
@@ -927,7 +933,9 @@ func schedinit() {
 
 	// mcommoninit runs before parsedebugvars, so init profstacks again.
 	mProfStackInit(gp.m)
-	defaultGOMAXPROCSInit()
+	if !faststart {
+		defaultGOMAXPROCSInit()
+	}
 
 	lock(&sched.lock)
 	sched.lastpoll.Store(nanotime())

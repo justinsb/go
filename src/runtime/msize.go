@@ -22,10 +22,16 @@ func roundupsize(size uintptr, noscan bool) (reqSize uintptr) {
 		}
 		// (reqSize - size) is either mallocHeaderSize or 0. We need to subtract mallocHeaderSize
 		// from the result if we have one, since mallocgc will add it back in.
+		var sizeclass uint8
 		if reqSize <= gc.SmallSizeMax-8 {
-			return uintptr(gc.SizeClassToSize[gc.SizeToSizeClass8[divRoundUp(reqSize, gc.SmallSizeDiv)]]) - (reqSize - size)
+			sizeclass = gc.SizeToSizeClass8[divRoundUp(reqSize, gc.SmallSizeDiv)]
+		} else {
+			sizeclass = gc.SizeToSizeClass128[divRoundUp(reqSize-gc.SmallSizeMax, gc.LargeSizeDiv)]
 		}
-		return uintptr(gc.SizeClassToSize[gc.SizeToSizeClass128[divRoundUp(reqSize-gc.SmallSizeMax, gc.LargeSizeDiv)]]) - (reqSize - size)
+		if faststart {
+			sizeclass = faststartSizeClass[sizeclass]
+		}
+		return uintptr(gc.SizeClassToSize[sizeclass]) - (reqSize - size)
 	}
 	// Large object. Align reqSize up to the next page. Check for overflow.
 	reqSize += pageSize - 1

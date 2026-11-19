@@ -119,6 +119,11 @@ func SetDefaultGOMAXPROCS() {
 	// would do at startup if the GOMAXPROCS environment variable were
 	// unset." It still respects GODEBUG.
 
+	if faststart {
+		// The caller is asking for the cgroup limit to be
+		// taken into account now.
+		faststartCgroupProbe()
+	}
 	procs := defaultGOMAXPROCS(0)
 
 	lock(&sched.lock)

@@ -1036,7 +1036,9 @@ const doubleCheckMalloc = false
 // mallocgc implementation: the experiment must be enabled, and none of the sanitizers should
 // be enabled. The tables used to select the size-specialized malloc function do not compile
 // properly on plan9, so size-specialized malloc is also disabled on plan9.
-const sizeSpecializedMallocEnabled = goexperiment.SizeSpecializedMalloc && GOOS != "plan9" && !asanenabled && !raceenabled && !msanenabled && !valgrindenabled
+// It is disabled in fast start mode because that mode maps allocations to a
+// reduced set of size classes. See faststartSizeClass.
+const sizeSpecializedMallocEnabled = goexperiment.SizeSpecializedMalloc && GOOS != "plan9" && !faststart && !asanenabled && !raceenabled && !msanenabled && !valgrindenabled
 
 // runtimeFreegcEnabled is the set of conditions where we enable the runtime.freegc
 // implementation and the corresponding allocation-related changes: the experiment must be
@@ -1385,6 +1387,9 @@ func mallocgcSmallNoscan(size uintptr, typ *_type, needzero bool) (unsafe.Pointe
 	} else {
 		sizeclass = gc.SizeToSizeClass128[divRoundUp(size-gc.SmallSizeMax, gc.LargeSizeDiv)]
 	}
+	if faststart {
+		sizeclass = faststartSizeClass[sizeclass]
+	}
 	size = uintptr(gc.SizeClassToSize[sizeclass])
 	spc := makeSpanClass(sizeclass, true)
 	span := c.alloc[spc]
@@ -1528,6 +1533,9 @@ func mallocgcSmallScanNoHeader(size uintptr, typ *_type) (unsafe.Pointer, uintpt
 	checkGCTrigger := false
 	c := getMCache(mp)
 	sizeclass := gc.SizeToSizeClass8[divRoundUp(size, gc.SmallSizeDiv)]
+	if faststart {
+		sizeclass = faststartSizeClass[sizeclass]
+	}
 	spc := makeSpanClass(sizeclass, false)
 	span := c.alloc[spc]
 	v := nextFreeFast(span)
@@ -1624,6 +1632,9 @@ func mallocgcSmallScanHeader(size uintptr, typ *_type) (unsafe.Pointer, uintptr)
 		sizeclass = gc.SizeToSizeClass8[divRoundUp(size, gc.SmallSizeDiv)]
 	} else {
 		sizeclass = gc.SizeToSizeClass128[divRoundUp(size-gc.SmallSizeMax, gc.LargeSizeDiv)]
+	}
+	if faststart {
+		sizeclass = faststartSizeClass[sizeclass]
 	}
 	size = uintptr(gc.SizeClassToSize[sizeclass])
 	spc := makeSpanClass(sizeclass, false)
@@ -1994,6 +2005,9 @@ func freegc(ptr unsafe.Pointer, size uintptr, noscan bool) bool {
 		sizeclass = gc.SizeToSizeClass8[divRoundUp(size, gc.SmallSizeDiv)]
 	} else {
 		sizeclass = gc.SizeToSizeClass128[divRoundUp(size-gc.SmallSizeMax, gc.LargeSizeDiv)]
+	}
+	if faststart {
+		sizeclass = faststartSizeClass[sizeclass]
 	}
 
 	spc := makeSpanClass(sizeclass, noscan)

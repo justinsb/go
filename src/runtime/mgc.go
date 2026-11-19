@@ -208,14 +208,28 @@ func gcinit() {
 // just before we're about to start letting user code run.
 // It kicks off the background sweeper goroutine, the background
 // scavenger goroutine, and enables GC.
+//
+// In fast start mode the goroutines are started by faststartDeferred
+// instead.
 func gcenable() {
+	if !faststart {
+		gcStartBackground()
+	}
+	memstats.enablegc = true // now that runtime is initialized, GC is okay
+}
+
+// gcStartBackground starts the background sweeper and scavenger
+// goroutines and waits for them to park.
+//
+// It is normally called once during runtime initialization. In fast
+// start mode it is instead called when the first GC cycle starts.
+func gcStartBackground() {
 	// Kick off sweeping and scavenging.
 	c := make(chan int, 2)
 	go bgsweep(c)
 	go bgscavenge(c)
 	<-c
 	<-c
-	memstats.enablegc = true // now that runtime is initialized, GC is okay
 }
 
 // Garbage collector phase.
@@ -752,6 +766,13 @@ func gcStart(trigger gcTrigger) {
 		defer func() {
 			gp.bubble = bubble
 		}()
+	}
+
+	if faststart && !faststartDeferred() {
+		// The runtime initialization that fast start mode put
+		// off is in progress. The goroutine running it will start
+		// the cycle once it is done.
+		return
 	}
 
 	// Pick up the remaining unswept/not being swept spans concurrently
