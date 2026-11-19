@@ -72,6 +72,18 @@ func GOMAXPROCS(n int) int {
 		n = 1 // WebAssembly has no threads yet, so only one CPU is possible.
 	}
 
+	if faststart && faststartState.procs.Load() != faststartProcsDone && getg().m.locks == 0 {
+		// Make sure the caller sees, as the current setting, the
+		// default that fast start mode has not yet applied.
+		//
+		// That means stopping the world, which we can't do if
+		// the caller has pinned itself to its P, as sync.Pool
+		// does. Such a caller sees the temporary setting, as
+		// it would if it had called while the world was stopped
+		// to change GOMAXPROCS.
+		faststartDefaultGOMAXPROCS()
+	}
+
 	lock(&sched.lock)
 	ret := int(gomaxprocs)
 	if n <= 0 {
@@ -120,9 +132,9 @@ func SetDefaultGOMAXPROCS() {
 	// unset." It still respects GODEBUG.
 
 	if faststart {
-		// The caller is asking for the cgroup limit to be
-		// taken into account now.
+		// Make sure the cgroup limit is taken into account.
 		faststartCgroupProbe()
+		faststartState.procs.Store(faststartProcsDone)
 	}
 	procs := defaultGOMAXPROCS(0)
 

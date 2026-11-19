@@ -92,6 +92,16 @@ func goenvs_unix() {
 	}
 
 	envs = make([]string, n)
+	if faststart && !iscgo {
+		// Don't copy the environment into the heap. The strings
+		// the kernel placed above the stack stay where they are
+		// for the life of the process, and without cgo there is
+		// no C code that might modify them in place.
+		for i := int32(0); i < n; i++ {
+			envs[i] = gostringnocopy(argv_index(argv, argc+1+i))
+		}
+		return
+	}
 	for i := int32(0); i < n; i++ {
 		envs[i] = gostring(argv_index(argv, argc+1+i))
 	}

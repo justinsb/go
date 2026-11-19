@@ -216,6 +216,11 @@ func poll_runtime_pollServerInit() {
 }
 
 func netpollGenericInit() {
+	if faststart {
+		// sysmon polls the network on behalf of a program whose
+		// Ps are all busy.
+		faststartSysmon()
+	}
 	if netpollInited.Load() == 0 {
 		lockInit(&netpollInitLock, lockRankNetpollInit)
 		lockInit(&pollcache.lock, lockRankPollCache)

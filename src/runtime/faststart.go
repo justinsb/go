@@ -39,29 +39,33 @@ import (
 //     GOMAXPROCS, and the goroutine that keeps GOMAXPROCS up to date is
 //     not started.
 //
-//   - At most faststartInitialProcs Ps are created, however many CPUs
-//     the machine has. Each P is a sizable heap allocation that has to
-//     be initialized, so on a large machine creating them all dominates
-//     the cost of starting up.
+//   - Only one P is created, however many CPUs the machine has. Each P
+//     is a sizable heap allocation that has to be initialized, so on a
+//     large machine creating them all dominates the cost of starting up.
 //
 // The last two mean that, unless the GOMAXPROCS environment variable is
-// set, GOMAXPROCS starts out as the smaller of faststartInitialProcs and
-// the number of CPUs in the affinity mask, and only takes on its usual
-// default value, including any cgroup CPU limit, when the first GC cycle
-// is about to start. A program that wants the usual default sooner can
-// call [SetDefaultGOMAXPROCS].
+// set, the program starts running with a single P. It moves to the usual
+// default value of GOMAXPROCS, including any cgroup CPU limit, as soon
+// as it could make a difference: when the program starts a goroutine,
+// calls [GOMAXPROCS] or [SetDefaultGOMAXPROCS], or is about to start its
+// first GC cycle. See faststartDefaultGOMAXPROCS.
 //
 // Starting those goroutines eagerly is expensive mostly because each one
-// wakes an idle P, which creates an OS thread. With them deferred, a
-// program that does not start goroutines of its own runs main.main with
-// only the main thread and sysmon.
+// wakes an idle P, which creates an OS thread.
+//
+// sysmon is not started until the program first does something that
+// could need it. See faststartSysmon. Together with the above, this
+// means that a program that does not start goroutines or set timers
+// runs main.main with no threads other than the main thread, and so
+// also exits without having to stop any.
+//
+// A few smaller things are skipped altogether. The runtime does not ask
+// the kernel for the transparent huge page size, so it does not manage
+// huge pages (see osinit), and without cgo it does not copy the
+// environment into the heap (see goenvs_unix).
 //
 // Fast start mode also changes the heap so that fewer pages are touched
 // for the first time during startup. See faststartSizeClass.
-
-// faststartInitialProcs is the largest default value of GOMAXPROCS that
-// fast start mode uses before faststartDeferred has run.
-const faststartInitialProcs = 4
 
 // faststartState holds the state of the work that fast start mode
 // defers.
@@ -70,10 +74,32 @@ var faststartState struct {
 	// faststartDeferred* constants.
 	deferred atomic.Uint32
 
+	// procs is the state of the default value of GOMAXPROCS: one of
+	// the faststartProcs* constants.
+	procs atomic.Uint32
+
+	// single is 0 until the program starts a goroutine of its own,
+	// other than the main goroutine.
+	single atomic.Uint32
+
+	// sysmon is 1 once sysmon has been started.
+	sysmon atomic.Uint32
+
 	// cgroupProbed is set once the deferred defaultGOMAXPROCSInit
 	// has run. Protected by computeMaxProcsLock.
 	cgroupProbed bool
 }
+
+const (
+	// GOMAXPROCS has its usual default value, or one the program
+	// chose. This is the zero value because it is the state when the
+	// GOMAXPROCS environment variable is set.
+	faststartProcsDone uint32 = iota
+	// schedinit set GOMAXPROCS to 1 instead of its usual default.
+	faststartProcsDeferred
+	// As above, and newproc has started a goroutine to fix that.
+	faststartProcsStarting
+)
 
 const (
 	faststartDeferredPending uint32 = iota
@@ -106,6 +132,10 @@ func faststartDeferred() bool {
 		return faststartState.deferred.Load() == faststartDeferredDone
 	}
 
+	// The GC relies on sysmon to wake the scavenger and to force
+	// periodic cycles.
+	faststartSysmon()
+
 	// The sweeper and scavenger must be parked and ready to be woken
 	// before the cycle reaches sweep termination.
 	gcStartBackground()
@@ -113,14 +143,48 @@ func faststartDeferred() bool {
 	// Periodic GC can only trigger after a first cycle completes.
 	go forcegchelper()
 
-	// Pick up the cgroup CPU limit and switch to the usual default
-	// value of GOMAXPROCS, then start keeping it up to date.
-	faststartCgroupProbe()
+	// Switch to the usual default value of GOMAXPROCS, if that has
+	// not happened already, then start keeping it up to date.
 	faststartDefaultGOMAXPROCS()
 	defaultGOMAXPROCSUpdateEnable()
 
 	faststartState.deferred.Store(faststartDeferredDone)
 	return true
+}
+
+// faststartSysmon starts sysmon if it is not already running.
+//
+// In fast start mode sysmon is not started by runtime.main, which saves
+// creating a thread, and tearing it down again at exit, in a program
+// that never needs it. A program whose only goroutine is the main
+// goroutine, and which has not yet run a GC cycle, needs nothing that
+// sysmon does: there is no other goroutine that the main goroutine
+// could be keeping from running, either by not yielding or by holding
+// its P in a system call. So sysmon is started by the first thing that
+// could change that:
+//
+//   - a go statement (newproc) that starts anything but one of the
+//     runtime's own goroutines, once runtime.main is running;
+//   - a timer being set (timer.modify), since timers are run by Ps;
+//   - the network poller being initialized (netpollGenericInit);
+//   - the first GC cycle (faststartDeferred).
+//
+// It is started unconditionally if the program uses cgo, since C code
+// can call into Go on threads the runtime knows nothing about, or if
+// GODEBUG=schedtrace is set.
+//
+// The caller must have a P, and must be able to allocate and to acquire
+// sched.lock. It may be running on a user stack or on the system stack.
+func faststartSysmon() {
+	if !haveSysmon || faststartState.sysmon.Load() != 0 {
+		return
+	}
+	if !faststartState.sysmon.CompareAndSwap(0, 1) {
+		return
+	}
+	systemstack(func() {
+		newm(sysmon, nil, -1)
+	})
 }
 
 // faststartCgroupProbe performs the cgroup probe that the runtime
@@ -149,12 +213,28 @@ func faststartCgroupProbe() {
 }
 
 // faststartDefaultGOMAXPROCS sets GOMAXPROCS to its usual default value,
-// which schedinit did not do in fast start mode, unless the program has
-// chosen a value of its own in the meantime.
+// unless the program has chosen a value of its own in the meantime.
+//
+// In fast start mode schedinit does not consult the cgroup CPU limit and
+// creates a single P. This function does both of the things it left out.
+// It is called, whichever comes first,
+//
+//   - on a goroutine of its own, when the program first starts a
+//     goroutine (see newproc);
+//   - by [GOMAXPROCS], so that the program does not normally observe
+//     the temporary value;
+//   - by faststartDeferred, when the first GC cycle is about to start.
 //
 // It stops the world, so the caller must be able to block and must not
-// hold gcsema or worldsema.
+// hold gcsema or worldsema. It is safe to call more than once, and from
+// more than one goroutine at a time.
 func faststartDefaultGOMAXPROCS() {
+	if faststartState.procs.Load() == faststartProcsDone {
+		return
+	}
+	faststartCgroupProbe()
+	defer faststartState.procs.Store(faststartProcsDone)
+
 	// Synchronize with GOMAXPROCS. See comment on computeMaxProcsLock.
 	lock(&computeMaxProcsLock)
 	lock(&sched.lock)

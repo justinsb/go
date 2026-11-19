@@ -83,15 +83,37 @@ func TestFaststartDeferred(t *testing.T) {
 }
 
 // TestFaststartGOMAXPROCS checks that a program built in fast start mode
-// starts with a bounded number of Ps, and moves to the default GOMAXPROCS
-// once it runs a GC cycle.
+// starts with a single P, and moves to the default GOMAXPROCS when it
+// asks what GOMAXPROCS is or starts a goroutine.
 func TestFaststartGOMAXPROCS(t *testing.T) {
 	exe, err := buildTestProg(t, "testprog", "-tags=faststart")
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := runBuiltTestProg(t, exe, "FaststartGOMAXPROCS")
-	if want := "OK\n"; got != want {
-		t.Errorf("got:\n%swant:\n%s", got, want)
+	for _, prog := range []string{"FaststartGOMAXPROCS", "FaststartGOMAXPROCSGo"} {
+		t.Run(prog, func(t *testing.T) {
+			got := runBuiltTestProg(t, exe, prog)
+			if want := "OK\n"; got != want {
+				t.Errorf("got:\n%swant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+// TestFaststartSysmon checks that a program built in fast start mode,
+// which starts without sysmon, gets it started in time for the things
+// that depend on it.
+func TestFaststartSysmon(t *testing.T) {
+	exe, err := buildTestProg(t, "testprog", "-tags=faststart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prog := range []string{"FaststartTimerSpin", "FaststartTimerSyscall"} {
+		t.Run(prog, func(t *testing.T) {
+			got := runBuiltTestProg(t, exe, prog)
+			if want := "OK\n"; got != want {
+				t.Errorf("got:\n%swant:\n%s", got, want)
+			}
+		})
 	}
 }

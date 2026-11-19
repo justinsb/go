@@ -130,6 +130,10 @@ func initsig(preinit bool) {
 			continue
 		}
 
+		if faststart && faststartInitsig(i) {
+			continue
+		}
+
 		// We don't need to use atomic operations here because
 		// there shouldn't be any other goroutines running yet.
 		fwdSig[i] = getsig(i)

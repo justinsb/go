@@ -554,6 +554,13 @@ func (t *timer) modify(when, period int64, f func(arg any, seq uintptr, delay in
 		throw("timer period must be non-negative")
 	}
 
+	if faststart {
+		// If the only P is busy running the main goroutine, or
+		// is tied up in a system call, it takes sysmon to notice
+		// and get the timer run.
+		faststartSysmon()
+	}
+
 	if t.isChan {
 		lock(&t.sendLock)
 	}

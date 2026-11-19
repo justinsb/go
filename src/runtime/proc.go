@@ -174,7 +174,13 @@ func main() {
 	// Allow newproc to start new Ms.
 	mainStarted = true
 
-	if haveSysmon {
+	if faststart {
+		// sysmon is started when something first needs it.
+		// See faststartSysmon.
+		if iscgo || debug.schedtrace > 0 {
+			faststartSysmon()
+		}
+	} else if haveSysmon {
 		systemstack(func() {
 			newm(sysmon, nil, -1)
 		})
@@ -954,10 +960,11 @@ func schedinit() {
 		//    just numCPUStartup).
 		procs = defaultGOMAXPROCS(numCPUStartup)
 		if faststart {
-			// Don't pay for Ps that a short-lived program
-			// will never use. faststartDeferred creates
-			// the rest.
-			procs = min(procs, faststartInitialProcs)
+			// Don't pay for Ps that a program with a single
+			// goroutine will never use.
+			// See faststartDefaultGOMAXPROCS.
+			procs = 1
+			faststartState.procs.Store(faststartProcsDeferred)
 		}
 	}
 	if procresize(procs) != nil {
@@ -5348,6 +5355,7 @@ func malg(stacksize int32) *g {
 func newproc(fn *funcval) {
 	gp := getg()
 	pc := sys.GetCallerPC()
+	startProcs := false
 	systemstack(func() {
 		newg := newproc1(fn, gp, pc, false, waitReasonZero)
 
@@ -5355,9 +5363,33 @@ func newproc(fn *funcval) {
 		runqput(pp, newg, true)
 
 		if mainStarted {
+			if faststart && faststartState.single.Load() == 0 && !isSystemGoroutine(newg, false) {
+				// The program now has more than one
+				// goroutine of its own, so it may need
+				// sysmon to preempt them or to retake
+				// their Ps, and it can make use of more
+				// than one P.
+				//
+				// The runtime's own goroutines don't
+				// count. Some of them, like the one
+				// that runs finalizers, are started by
+				// almost every program, but they have
+				// nothing to do before the first GC
+				// cycle, when faststartDeferred does
+				// all of this anyway.
+				faststartState.single.Store(1)
+				faststartSysmon()
+				startProcs = faststartState.procs.CompareAndSwap(faststartProcsDeferred, faststartProcsStarting)
+			}
 			wakep()
 		}
 	})
+	if startProcs {
+		// Changing GOMAXPROCS means stopping the world, which
+		// we can't do here: our caller may be anywhere in the
+		// runtime. Have another goroutine do it.
+		go faststartDefaultGOMAXPROCS()
+	}
 }
 
 // Create a new g in state _Grunnable (or _Gwaiting if parked is true), starting at fn.

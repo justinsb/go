@@ -352,7 +352,13 @@ func getHugePageSize() uintptr {
 
 func osinit() {
 	numCPUStartup = getCPUCount()
-	physHugePageSize = getHugePageSize()
+	if !faststart {
+		// In fast start mode, leave physHugePageSize as 0 and
+		// forgo the runtime's management of transparent huge
+		// pages rather than open and read a sysfs file on every
+		// start.
+		physHugePageSize = getHugePageSize()
+	}
 	vgetrandomInit()
 	configure64bitsTimeOn32BitsArchitectures()
 }
@@ -476,6 +482,15 @@ const (
 //go:nosplit
 //go:nowritebarrierrec
 func setsig(i uint32, fn uintptr) {
+	setsig1(i, fn, nil)
+}
+
+// setsig1 is setsig, but if old is not nil it also stores the previous
+// action for the signal in *old, as part of the same system call.
+//
+//go:nosplit
+//go:nowritebarrierrec
+func setsig1(i uint32, fn uintptr, old *sigactiont) {
 	var sa sigactiont
 	sa.sa_flags = _SA_SIGINFO | _SA_ONSTACK | _SA_RESTORER | _SA_RESTART
 	sigfillset(&sa.sa_mask)
@@ -494,7 +509,7 @@ func setsig(i uint32, fn uintptr) {
 		}
 	}
 	sa.sa_handler = fn
-	sigaction(i, &sa, nil)
+	sigaction(i, &sa, old)
 }
 
 //go:nosplit
