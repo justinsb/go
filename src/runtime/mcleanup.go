@@ -656,6 +656,9 @@ func (q *cleanupQueue) needG() bool {
 }
 
 func (q *cleanupQueue) createGs() {
+	if faststart && faststartDeferGoroutine(faststartWantCleanup) {
+		return
+	}
 	lock(&q.lock)
 	have := q.ng.Load()
 	need := min(q.needg.Swap(0), maxCleanupGs()-have)

@@ -100,15 +100,16 @@ func TestFaststartGOMAXPROCS(t *testing.T) {
 	}
 }
 
-// TestFaststartSysmon checks that a program built in fast start mode,
-// which starts without sysmon, gets it started in time for the things
-// that depend on it.
-func TestFaststartSysmon(t *testing.T) {
+// TestFaststartOnDemand checks that a program built in fast start mode,
+// which starts without sysmon and without the goroutines that run
+// finalizers and cleanups, gets them started in time for the things
+// that depend on them.
+func TestFaststartOnDemand(t *testing.T) {
 	exe, err := buildTestProg(t, "testprog", "-tags=faststart")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, prog := range []string{"FaststartTimerSpin", "FaststartTimerSyscall"} {
+	for _, prog := range []string{"FaststartTimerSpin", "FaststartTimerSyscall", "FaststartFinalizer"} {
 		t.Run(prog, func(t *testing.T) {
 			got := runBuiltTestProg(t, exe, prog)
 			if want := "OK\n"; got != want {

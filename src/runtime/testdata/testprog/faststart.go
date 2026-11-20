@@ -21,6 +21,7 @@ func init() {
 	register("FaststartGOMAXPROCS", FaststartGOMAXPROCS)
 	register("FaststartGOMAXPROCSGo", FaststartGOMAXPROCSGo)
 	register("FaststartTimerSpin", FaststartTimerSpin)
+	register("FaststartFinalizer", FaststartFinalizer)
 	register("FaststartTimerSyscall", FaststartTimerSyscall)
 }
 
@@ -129,6 +130,33 @@ func FaststartTimerSyscall() {
 	if n, err := syscall.Read(p[0], buf[:]); n != 1 || err != nil {
 		fmt.Println("read:", n, err)
 		os.Exit(1)
+	}
+	fmt.Println("OK")
+}
+
+// FaststartFinalizer checks that a finalizer and a cleanup registered
+// before the first GC cycle both run. In fast start mode the goroutines
+// that run them are not created until that cycle starts.
+func FaststartFinalizer() {
+	fin := make(chan string, 2)
+	func() {
+		x := new([64]byte)
+		runtime.SetFinalizer(x, func(*[64]byte) { fin <- "finalizer" })
+		y := new([64]byte)
+		runtime.AddCleanup(y, func(s string) { fin <- s }, "cleanup")
+	}()
+	deadline := time.After(30 * time.Second)
+	got := map[string]bool{}
+	for len(got) < 2 {
+		runtime.GC()
+		select {
+		case s := <-fin:
+			got[s] = true
+		case <-time.After(10 * time.Millisecond):
+		case <-deadline:
+			fmt.Println("timed out; ran:", got)
+			os.Exit(1)
+		}
 	}
 	fmt.Println("OK")
 }

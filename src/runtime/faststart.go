@@ -35,6 +35,11 @@ import (
 //     only ever forced once a first cycle has completed (see
 //     gcTrigger.test).
 //
+//   - The goroutines that run finalizers and cleanups are not started
+//     when the first finalizer or cleanup is registered. None can be
+//     ready to run before a cycle has found something unreachable.
+//     See faststartDeferGoroutine.
+//
 //   - The cgroup CPU limit is not consulted when choosing the initial
 //     GOMAXPROCS, and the goroutine that keeps GOMAXPROCS up to date is
 //     not started.
@@ -91,6 +96,11 @@ var faststartState struct {
 	// procs is the state of the default value of GOMAXPROCS: one of
 	// the faststartProcs* constants.
 	procs atomic.Uint32
+
+	// wantG is the set of goroutines whose creation
+	// faststartDeferGoroutine put off: a combination of the
+	// faststartWant* constants.
+	wantG atomic.Uint32
 
 	// single is 0 until the program starts a goroutine of its own,
 	// other than the main goroutine.
@@ -163,7 +173,39 @@ func faststartDeferred() bool {
 	defaultGOMAXPROCSUpdateEnable()
 
 	faststartState.deferred.Store(faststartDeferredDone)
+
+	// Start the goroutines that faststartDeferGoroutine put off, now
+	// that there may be something for them to do. This must come
+	// after the store above, which is what lets them be created.
+	faststartCreateDeferredGoroutines(faststartState.wantG.Load())
 	return true
+}
+
+const (
+	faststartWantFing uint32 = 1 << iota
+	faststartWantCleanup
+)
+
+// faststartDeferGoroutine reports whether the caller should put off
+// creating one of the runtime's goroutines, identified by which, that
+// has no work to do until a GC cycle has run: the goroutines that run
+// finalizers and cleanups. If so, faststartDeferred creates it.
+//
+// Nearly every program asks for these goroutines, because package os
+// attaches cleanups to the standard file descriptors. Creating them is
+// not free: the first goroutine a program creates sets up the pool of
+// goroutine stacks, which touches every page of a 32 KiB span.
+//
+// The function that creates the goroutine must be safe to call more than
+// once, since both it and faststartDeferred may end up doing so.
+func faststartDeferGoroutine(which uint32) bool {
+	if faststartState.deferred.Load() == faststartDeferredDone {
+		return false
+	}
+	faststartState.wantG.Or(which)
+	// faststartDeferred may have read wantG before we set it,
+	// in which case it is done by now.
+	return faststartState.deferred.Load() != faststartDeferredDone
 }
 
 // faststartSysmon starts sysmon if it is not already running.

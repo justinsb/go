@@ -167,6 +167,9 @@ func wakefing() *g {
 }
 
 func createfing() {
+	if faststart && faststartDeferGoroutine(faststartWantFing) {
+		return
+	}
 	// start the finalizer goroutine exactly once
 	if fingStatus.Load() == fingUninitialized && fingStatus.CompareAndSwap(fingUninitialized, fingCreated) {
 		go runFinalizers()

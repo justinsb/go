@@ -9,3 +9,5 @@ package runtime
 // faststart reports whether the runtime was built with the faststart
 // build tag. See faststart.go.
 const faststart = false
+
+func faststartCreateDeferredGoroutines(want uint32) {}
