@@ -691,6 +691,13 @@ func reflect_compiledTypelinks() ([]*abi.Type, [][]*abi.Type) {
 	return firstTypes, rest
 }
 
+// reflect_singleModule reports whether there is a single active module.
+//
+//go:linknamestd reflect_singleModule reflect.singleModule
+func reflect_singleModule() bool {
+	return len(activeModules()) == 1
+}
+
 // reflect_resolveNameOff resolves a name offset from a base pointer.
 //
 // reflect_resolveNameOff is for package reflect,

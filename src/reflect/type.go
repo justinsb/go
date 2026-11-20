@@ -1411,14 +1411,30 @@ func (t *rtype) ptrTo() *abi.Type {
 	}
 
 	// Look in known types.
+	//
+	// There is usually nothing to find. Whenever the compiler
+	// emits the descriptor for a type T that is not itself a
+	// pointer, it emits the one for *T too, and makes T's PtrToThis
+	// a weak reference to it. The linker resolves that reference if
+	// anything else keeps *T alive and zeroes it if not. So within
+	// one module, a zero PtrToThis on a non-pointer type means that
+	// *T is not there to be found, and we can skip a search that
+	// would make the runtime list every type in the program.
+	//
+	// That reasoning does not hold for a pointer type, for which
+	// the compiler does not always emit a descriptor for a pointer
+	// to it, or across modules, since another module may have the
+	// *T that the one defining T lacks.
 	s := "*" + t.String()
-	for _, tt := range typesByString(s) {
-		p := (*ptrType)(unsafe.Pointer(tt))
-		if p.Elem != &t.t {
-			continue
+	if at.Kind() == abi.Pointer || !singleModule() {
+		for _, tt := range typesByString(s) {
+			p := (*ptrType)(unsafe.Pointer(tt))
+			if p.Elem != &t.t {
+				continue
+			}
+			pi, _ := ptrMap.LoadOrStore(t, p)
+			return &pi.(*ptrType).Type
 		}
-		pi, _ := ptrMap.LoadOrStore(t, p)
-		return &pi.(*ptrType).Type
 	}
 
 	// Create a new ptrType starting with the description
@@ -1722,6 +1738,14 @@ func haveIdenticalUnderlyingType(T, V *abi.Type, cmpTags bool) bool {
 //
 //go:linknamestd compiledTypelinks
 func compiledTypelinks() ([]*abi.Type, [][]*abi.Type)
+
+// singleModule is implemented in package runtime.
+// It reports whether the program currently consists of a single module,
+// which is the case unless it was built to use shared libraries or
+// has loaded a plugin.
+//
+//go:linknamestd singleModule
+func singleModule() bool
 
 // rtypeOff should be an internal detail,
 // but widely used packages access it using linkname.
