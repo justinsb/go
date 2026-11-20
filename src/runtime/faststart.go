@@ -67,6 +67,20 @@ import (
 // Fast start mode also changes the heap so that fewer pages are touched
 // for the first time during startup. See faststartSizeClass.
 
+// faststartMainStack is the size of the stack that the main goroutine
+// starts with in fast start mode.
+//
+// Goroutines normally start with a stack of stackMin bytes, which is
+// grown by copying it to one twice the size each time it overflows. The
+// main goroutine of almost any program overflows it during package
+// initialization, and typically several more times after that. Each
+// copy has to find and adjust every frame, and the first one also pays
+// for the first use of everything that involves. Stack memory that is
+// never touched costs nothing, so start the one goroutine that every
+// program has with enough stack that a short-lived program never
+// needs to grow it.
+const faststartMainStack = 32 << 10
+
 // faststartState holds the state of the work that fast start mode
 // defers.
 var faststartState struct {

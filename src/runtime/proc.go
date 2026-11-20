@@ -5404,7 +5404,12 @@ func newproc1(fn *funcval, callergp *g, callerpc uintptr, parked bool, waitreaso
 	pp := mp.p.ptr()
 	newg := gfget(pp)
 	if newg == nil {
-		newg = malg(stackMin)
+		stacksize := int32(stackMin)
+		if faststart && !mainStarted && len(allgs) == 0 {
+			// This is the main goroutine.
+			stacksize = faststartMainStack
+		}
+		newg = malg(stacksize)
 		casgstatus(newg, _Gidle, _Gdead)
 		allgadd(newg) // publishes with a g->status of Gdead so GC scanner doesn't look at uninitialized stack.
 	}
